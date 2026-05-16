@@ -78,15 +78,26 @@ reproduction (60.64 / 17.11), confirming the bench is consistent.
 
 ### Low-latency / "decode" — end-to-end dispatch + combine latency
 
-Test config: 128 tokens, hidden 7168, top-k 8, 256/288 experts. Lower =
-better.
+Test config: 128 tokens, hidden 7168, top-k 8, 288 experts (256 for V1
+since its bench defaults differ). Lower = better.
 
 | Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine |
 |---|---|---|---|---|
-| pplx-garden (decode shape) | 402 µs | 517 µs (p50) | **224 µs** | **246 µs** |
-| **UCCL-EP** | ~3200 µs | ~830 µs | **207 µs** | 301 µs |
+| pplx-garden (decode shape) | 402 µs | 517 µs (p50) | **222 µs** (p50) | **245 µs** (p50) |
+| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | — | — | **212 µs** (p50) | 324 µs (p50) |
+| UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | 207 µs | 301 µs |
 | DeepEP V1 + amazon NVSHMEM | ~700 µs | ~720 µs | 602 µs | 561 µs |
 | DeepEP V2 (`deepep-v2-uccl-style/` decode) | — | — | 1690 µs | 1700 µs |
+
+UCCL's two bench modes report consistent numbers (~210 µs dispatch,
+~310 µs combine) — the difference is just statistic format. The
+**`run_ll_pplx_style.sh` row uses pplx-garden's own measurement
+methodology** (warmup + repeats, p50 over end-to-end), which lets you
+compare UCCL vs pplx-garden directly:
+
+- Dispatch is essentially **tied** (212 vs 222 µs p50) — UCCL slightly
+  edges pplx by 4.5 %.
+- Combine: **pplx-garden wins** by 32 % (245 vs 324 µs p50).
 
 **On p5en, UCCL-EP and pplx-garden are tied for fastest LL dispatch
 (207-224 µs)**, ~2.7-2.9× faster than DeepEP V1. **On p5, pplx-garden

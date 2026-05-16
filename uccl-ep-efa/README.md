@@ -27,6 +27,7 @@ launcher work on both.
 | `Dockerfile` | Builds `uccl-ep-efa:dev` |
 | `run_internode.sh` | 2-node launcher for `bench/test_internode.py` (normal) |
 | `run_low_latency.sh` | 2-node launcher for `bench/test_low_latency.py` |
+| `run_ll_pplx_style.sh` | 2-node launcher for `bench/test_low_latency_pplx.py` (same UCCL LL workload, but pplx-garden-style measurement: warmup+repeats, p50/p99 stats — directly comparable to pplx-garden bench output) |
 | `monitor_efa.sh` | Per-NIC EFA bandwidth snapshot (`-s`, `-b`, `-d`, `-l`) |
 | `sample_efa_bw.sh` | Time-series per-NIC sampler (writes a log file) |
 
@@ -240,6 +241,39 @@ and 2.9× ahead of DeepEP V1 (602 µs).
 Both stacks stripe across all 32 EFA NICs. UCCL is **not** single-NIC bound
 — the gap is in *per-NIC utilisation* and *NIC-balance uniformity*, not
 NIC count.
+
+### pplx-style LL measurement on p5en (decode shape, EP=16)
+
+UCCL ships a separate bench (`bench/test_low_latency_pplx.py`) that
+runs the same UCCL LL workload but uses pplx-garden's measurement
+methodology (warmup + N repeats, p50/p99 statistics over end-to-end
+latency). This makes UCCL numbers directly comparable to pplx-garden's
+bench output. Run via `run_ll_pplx_style.sh`.
+
+| Metric (p5en, decode 128 tok, 288 experts, top-8, FP8) | Value |
+|---|---|
+| Dispatch p50 latency | **212 µs** |
+| Dispatch BW | 35.78 GB/s |
+| Dispatch send / recv (kernel) | 41 / 27 µs |
+| Combine p50 latency | 324 µs |
+| Combine BW | 45.30 GB/s |
+| Combine send / recv (kernel) | 47 / 43 µs |
+
+Side-by-side (same workload, same measurement):
+
+| Op | UCCL pplx-style | pplx-garden | UCCL advantage |
+|---|---|---|---|
+| Dispatch p50 | **212 µs** | 222 µs | **-4.5 %** (UCCL faster) |
+| Combine p50 | 324 µs | **245 µs** | +32 % (pplx-garden faster) |
+| Dispatch BW | 35.78 GB/s | 34.0 GB/s | tied |
+| Combine BW | 45.30 GB/s | **59.8 GB/s** | pplx-garden +32 % |
+
+**Verdict on p5en LL/decode:** UCCL and pplx-garden are essentially
+tied on dispatch (UCCL slightly faster) but pplx-garden is clearly
+ahead on combine. The UCCL self-bench earlier reported dispatch 207 µs
+/ combine 301 µs (different reporting metric, same workload) — those
+match the pplx-style 212 / 324 numbers, confirming both UCCL bench
+modes are consistent.
 
 ---
 
