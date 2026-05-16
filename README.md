@@ -27,6 +27,7 @@ plugins, and tuning. This repo collects:
 | [`deepep-v1-efa/`](deepep-v1-efa/) | DeepEP V1 (`rauteric/DeepEP@remove-fence`) | NVSHMEM libfabric | amazon-contributing/upstream-to-nvshmem `devel_enriched` (libfabric remote transport, multi-NIC RR) |
 | [`uccl-ep-efa/`](uccl-ep-efa/) | UCCL-EP (`uccl-project/uccl@main`) | UCCL Rust RDMA stack | direct ibverbs / libfabric, multi-NIC at app layer |
 | [`deepep-v2-efa/`](deepep-v2-efa/) | DeepEP V2 (`deepseek-ai/DeepEP@main`) | NCCL Gin | aws-ofi-nccl `master` (`ncclGinPlugin_v11+`) |
+| [`deepep-v2-uccl-style/`](deepep-v2-uccl-style/) | DeepEP V2 (same image as above) | NCCL Gin | reuses `deepep-v2-efa:dev`; runs prefill / decode with **UCCL-EP-comparable params** so V2 numbers are directly comparable to UCCL's published p5en results |
 | [`pplx-garden-efa/`](pplx-garden-efa/) | pplx-garden (`perplexityai/pplx-garden@main`) | custom Rust libfabric | direct libfabric + multi-NIC aggregation (`fabric-lib`) |
 
 Each directory is self-contained. To reproduce any one of them:
@@ -57,17 +58,23 @@ differs (`rdmap79s0` on p5, `rdmap85s0` on p5en — both auto-detectable).
 ### Normal mode / "throughput" — RDMA bandwidth (per-rank effective)
 
 Test config: 4096 tokens, hidden 7168, top-k 8, ~256 experts, FP8 →
-BF16. Larger numbers = better.
+BF16. Larger numbers = better. *DeepEP V2 row uses the
+`deepep-v2-uccl-style/` launcher so it shares params with the others
+(288 experts, top-8).*
 
 | Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine |
 |---|---|---|---|---|
 | **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** | **53.92 GB/s** | **62.54 GB/s** | **58.48 GB/s** |
 | UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s |
-| DeepEP V2 + aws-ofi-nccl GIN | ~2 GB/s | ~12 GB/s | ~5 GB/s | 22-28 GB/s |
+| DeepEP V2 + aws-ofi-nccl GIN | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s |
 
 Reference: upstream DeepEP README on H800 + CX7 IB reports 43 GB/s for
 both dispatch and combine at EP=16. EFA matches or exceeds that on the
 mature stack (V1) thanks to wider per-rank NIC fan-out.
+
+UCCL-EP's published p5en numbers (`uccl-project/uccl/ep`) are
+**50 GB/s prefill dispatch and 18 GB/s combine** — within ~10 % of our
+reproduction (60.64 / 17.11), confirming the bench is consistent.
 
 ### Low-latency / "decode" — end-to-end dispatch + combine latency
 
@@ -79,6 +86,7 @@ better.
 | pplx-garden (decode shape) | 402 µs | 517 µs (p50) | **224 µs** | **246 µs** |
 | **UCCL-EP** | ~3200 µs | ~830 µs | **207 µs** | 301 µs |
 | DeepEP V1 + amazon NVSHMEM | ~700 µs | ~720 µs | 602 µs | 561 µs |
+| DeepEP V2 (`deepep-v2-uccl-style/` decode) | — | — | 1690 µs | 1700 µs |
 
 **On p5en, UCCL-EP and pplx-garden are tied for fastest LL dispatch
 (207-224 µs)**, ~2.7-2.9× faster than DeepEP V1. **On p5, pplx-garden
