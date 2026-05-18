@@ -29,6 +29,10 @@ plugins, and tuning. This repo collects:
 | [`deepep-v2-efa/`](deepep-v2-efa/) | DeepEP V2 (`deepseek-ai/DeepEP@main`) | NCCL Gin | aws-ofi-nccl `master` (`ncclGinPlugin_v11+`) |
 | [`deepep-v2-uccl-style/`](deepep-v2-uccl-style/) | DeepEP V2 (same image as above) | NCCL Gin | reuses `deepep-v2-efa:dev`; runs prefill / decode with **UCCL-EP-comparable params** so V2 numbers are directly comparable to UCCL's published p5en results |
 | [`pplx-garden-efa/`](pplx-garden-efa/) | pplx-garden (`perplexityai/pplx-garden@main`) | custom Rust libfabric | direct libfabric + multi-NIC aggregation (`fabric-lib`) |
+| [`deepep-v1-efa-b300/`](deepep-v1-efa-b300/) | DeepEP V1 (B300 variant) | NVSHMEM libfabric | adds `sm_100` to `CMAKE_CUDA_ARCHITECTURES` and `TORCH_CUDA_ARCH_LIST` |
+| [`uccl-ep-efa-b300/`](uccl-ep-efa-b300/) | UCCL-EP (B300 variant) | UCCL Rust RDMA stack | adds `10.0+PTX` to `TORCH_CUDA_ARCH_LIST`; **also requires the rdma.cpp fix from [uccl-project/uccl#950](https://github.com/uccl-project/uccl/pull/950)** which is applied at build-time on the patched `:dev`/`:b300` images |
+| [`deepep-v2-efa-b300/`](deepep-v2-efa-b300/) | DeepEP V2 (B300 variant) | NCCL Gin | adds `10.0` to `TORCH_CUDA_ARCH_LIST`, sets `EP_NIC_NAME=rdmap101s0` |
+| [`pplx-garden-efa-b300/`](pplx-garden-efa-b300/) | pplx-garden (B300 variant) | custom Rust libfabric | adds `10.3a+PTX` to `TORCH_CUDA_ARCH_LIST` and patches `p2p-all-to-all/a2a-kernels/build.rs` to emit `compute_103a/sm_103a` (upstream hardcodes `sm_100a` only, which fails at runtime on B300's `sm_103`) |
 
 Each directory is self-contained. To reproduce any one of them:
 
@@ -48,6 +52,7 @@ component-version pins.
 |---|---|---|---|---|---|
 | p5.48xlarge | H100 80GB × 8 | 32 | 100 Gbps | 3.2 Tbps | v1 |
 | p5en.48xlarge | H200 80GB × 8 | 16 | 200 Gbps | 3.2 Tbps | **v2** (newer SRD) |
+| **p6-b300.48xlarge** | **B300 SXM6 (sm_103) × 8** | 16 | **400 Gbps** | **6.4 Tbps** | **v3** |
 
 All numbers below: 2 nodes × 8 GPU = **16 ranks**, us-east-2, 2026-05-16.
 Same Dockerfiles and launchers work on both instances; only `EP_NIC_NAME`
@@ -62,11 +67,16 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 `deepep-v2-uccl-style/` launcher so it shares params with the others
 (288 experts, top-8).*
 
-| Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine |
-|---|---|---|---|---|
-| **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** | **53.92 GB/s** | **62.54 GB/s** | **58.48 GB/s** |
-| UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s |
-| DeepEP V2 + aws-ofi-nccl GIN | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s |
+| Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine | **B300 Dispatch BF16** | **B300 Combine** |
+|---|---|---|---|---|---|---|
+| **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** | **53.92 GB/s** | **62.54 GB/s** | **58.48 GB/s** | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
+| UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | **90.03 GB/s** | **58.99 GB/s** |
+| DeepEP V2 + aws-ofi-nccl GIN | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | 4 GB/s | 21-26 GB/s |
+
+**B300 highlights**: First time on EFA we see >100 GB/s per-rank in
+both directions for V1 (≈ 2.5× upstream IB README's 43 GB/s). UCCL-EP
+combine jumps from 17 → 59 GB/s — the per-NIC ceiling that bottlenecked
+combine on p5/p5en is gone with v3 NICs at 400 Gbps each.
 
 Reference: upstream DeepEP README on H800 + CX7 IB reports 43 GB/s for
 both dispatch and combine at EP=16. EFA matches or exceeds that on the
@@ -81,13 +91,24 @@ reproduction (60.64 / 17.11), confirming the bench is consistent.
 Test config: 128 tokens, hidden 7168, top-k 8, 288 experts (256 for V1
 since its bench defaults differ). Lower = better.
 
-| Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine |
-|---|---|---|---|---|
-| pplx-garden (decode shape) | 402 µs | 517 µs (p50) | **222 µs** (p50) | **245 µs** (p50) |
-| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | **212 µs** (p50) | 324 µs (p50) |
-| UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | 207 µs | 301 µs |
-| DeepEP V1 + amazon NVSHMEM | ~700 µs | ~720 µs | 602 µs | 561 µs |
-| DeepEP V2 (`deepep-v2-uccl-style/` decode) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs |
+| Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine | **B300 Dispatch** | **B300 Combine** |
+|---|---|---|---|---|---|---|
+| pplx-garden (decode shape) | 402 µs | 517 µs (p50) | 222 µs (p50) | 245 µs (p50) | **140 µs** (p50) ⭐ | **149 µs** (p50) ⭐ |
+| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | **212 µs** (p50) | 324 µs (p50) | **171 µs** (p50) | **219 µs** (p50) |
+| UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | 207 µs | 301 µs | 277 µs | **149 µs** ⭐ |
+| DeepEP V1 + amazon NVSHMEM (PR#9 reverted) | 585 µs | 639 µs | (n/a) | (n/a) | 691 µs | 416 µs |
+| DeepEP V1 + amazon NVSHMEM (PR#9 in) | 765 µs | 641 µs | 602 µs | 561 µs | (not run) | (not run) |
+| DeepEP V2 (`deepep-v2-uccl-style/` decode) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs | 1925 µs | 1700 µs |
+
+**B300 highlights**: pplx-garden hits **140 µs / 149 µs (p50)** — the
+fastest LL on EFA across all generations. UCCL-EP combine drops to
+149 µs (self-report) / 219 µs (pplx-style), again leveraging v3's
+per-NIC headroom. DeepEP V1 LL doesn't track the same way: dispatch
+is roughly flat (765 → 691 µs across hardware) because its CPU proxy
+RTT is already short, while combine improves more (641 → 416 µs)
+where NVLink + reduce kernel scaling is bandwidth-bound. DeepEP V2
+GIN remains slow on B300 — same architectural bottleneck observed on
+p5/p5en.
 
 UCCL's two bench modes report consistent numbers on p5en (~210 µs
 dispatch, ~310 µs combine) — the difference is just statistic format.
@@ -109,24 +130,26 @@ compare UCCL vs pplx-garden directly:
 is the clear leader** because UCCL's RDMA stack scales much worse with
 EFA v1 (32 × 100 Gbps NICs) than with EFA v2 (16 × 200 Gbps NICs).
 
-### pplx-garden prefill (4096 tokens, p5en only)
+### pplx-garden prefill (4096 tokens)
 
-| Op | mean | p50 | BW |
-|---|---|---|---|
-| Dispatch | 3128 µs | 3122 µs | 77.6 GB/s |
-| Combine | 5386 µs | 5365 µs | 87.6 GB/s |
+| Instance | Dispatch p50 | Combine p50 | Dispatch BW | Combine BW |
+|---|---|---|---|---|
+| p5en | 3122 µs | 5365 µs | 77.6 GB/s | 87.6 GB/s |
+| **B300** | **1725 µs** | **2672 µs** | **140 GB/s** | **177 GB/s** |
 
 Matches upstream README's published p5en numbers (3197 / 5379) within 2 %.
+B300 prefill is ~1.8× faster than p5en, tracking the per-NIC bandwidth
+doubling.
 
 ## Recommendations
 
-| Workload | p5.48xlarge | p5en.48xlarge |
-|---|---|---|
-| **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM |
-| **MoE inference, decode** (per-token A2A) | pplx-garden | UCCL-EP **or** pplx-garden (≈ tied) |
-| **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden |
-| **Provider-portable** (also AMD / CX7 / etc) | UCCL-EP | UCCL-EP |
-| **Very large EP (>EP128, low SM budget)** | watch DeepEP V2 + ofi-nccl GIN (still maturing) | watch DeepEP V2 + ofi-nccl GIN |
+| Workload | p5.48xlarge | p5en.48xlarge | **p6-b300.48xlarge** |
+|---|---|---|---|
+| **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM | **DeepEP V1** (110 GB/s dispatch, 102 GB/s combine) |
+| **MoE inference, decode** (per-token A2A) | pplx-garden | UCCL-EP **or** pplx-garden (≈ tied) | **pplx-garden** (140/149 µs) |
+| **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden (1.7/2.7 ms) |
+| **Provider-portable** (also AMD / CX7 / etc) | UCCL-EP | UCCL-EP | UCCL-EP (**requires PR #950 patch** for B300 NIC selection) |
+| **Very large EP (>EP128, low SM budget)** | watch DeepEP V2 + ofi-nccl GIN (still maturing) | watch DeepEP V2 + ofi-nccl GIN | watch DeepEP V2 + ofi-nccl GIN |
 
 ## Cross-stack hardware sensitivity
 
@@ -201,18 +224,21 @@ done
 ```
 
 Available tags:
-- `:dev` — current build for each image. **Note for
-  `deepep-v1-efa`**: as of 2026-05-17, `:dev` points to the
-  PR-#9-reverted variant (faster LL on EFA, see
-  [`deepep-v1-efa/INVESTIGATION_pr9_revert.md`](deepep-v1-efa/INVESTIGATION_pr9_revert.md)).
-- `:2026-05-17` — frozen snapshot of `:dev` for reproducibility.
-- `:revert-pr9` and `:revert-pr9-2026-05-17` (V1 only) — alias for
-  the current `:dev`, makes the variant explicit.
-- `:pr9-baseline` (V1 only) — V1 image **with** PR #9 in NVSHMEM
-  (the previous `:dev` pre-2026-05-17). Use this if you need the
-  unsolicited-write CQ-overflow protection enabled (e.g. workloads
-  with arbitrary communication patterns; DeepEP V1 LL has bounded
-  patterns and works fine without it).
+- `:dev` — current build for **p5/p5en** (sm_90).
+- `:2026-05-17` — frozen snapshot of p5/p5en `:dev`.
+- `:b300` — **B300 build** (sm_103). Use these on
+  p6-b300.48xlarge instances. UCCL-EP `:b300` includes the
+  [PR #950](https://github.com/uccl-project/uccl/pull/950) NIC-selection
+  fix; pplx-garden `:b300` includes the `compute_103a/sm_103a` build.rs
+  patch (upstream only emits `sm_100a`, which fails at runtime on B300).
+- `:b300-2026-05-18` — frozen B300 snapshot.
+- For `deepep-v1-efa` only:
+  - `:revert-pr9` and `:revert-pr9-2026-05-17` — alias for the
+    current p5/p5en `:dev` with NVSHMEM PR #9 reverted (faster LL on EFA,
+    see [`deepep-v1-efa/INVESTIGATION_pr9_revert.md`](deepep-v1-efa/INVESTIGATION_pr9_revert.md)).
+  - `:pr9-baseline` — image **with** PR #9 in NVSHMEM (the previous
+    `:dev` pre-2026-05-17). Use this if you need the unsolicited-write
+    CQ-overflow protection enabled (e.g. non-DeepEP-V1 workloads).
 
 ## Reproducing on your own EFA cluster
 
