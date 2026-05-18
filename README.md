@@ -200,8 +200,19 @@ for name in deepep-v1-efa uccl-ep-efa deepep-v2-efa pplx-garden-efa; do
 done
 ```
 
-Available tags: `:dev` (current build) and `:2026-05-17` (frozen
-snapshot for reproducibility).
+Available tags:
+- `:dev` — current build for each image. **Note for
+  `deepep-v1-efa`**: as of 2026-05-17, `:dev` points to the
+  PR-#9-reverted variant (faster LL on EFA, see
+  [`deepep-v1-efa/INVESTIGATION_pr9_revert.md`](deepep-v1-efa/INVESTIGATION_pr9_revert.md)).
+- `:2026-05-17` — frozen snapshot of `:dev` for reproducibility.
+- `:revert-pr9` and `:revert-pr9-2026-05-17` (V1 only) — alias for
+  the current `:dev`, makes the variant explicit.
+- `:pr9-baseline` (V1 only) — V1 image **with** PR #9 in NVSHMEM
+  (the previous `:dev` pre-2026-05-17). Use this if you need the
+  unsolicited-write CQ-overflow protection enabled (e.g. workloads
+  with arbitrary communication patterns; DeepEP V1 LL has bounded
+  patterns and works fine without it).
 
 ## Reproducing on your own EFA cluster
 
