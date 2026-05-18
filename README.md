@@ -84,20 +84,25 @@ since its bench defaults differ). Lower = better.
 | Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine |
 |---|---|---|---|---|
 | pplx-garden (decode shape) | 402 µs | 517 µs (p50) | **222 µs** (p50) | **245 µs** (p50) |
-| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | — | — | **212 µs** (p50) | 324 µs (p50) |
+| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | **212 µs** (p50) | 324 µs (p50) |
 | UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | 207 µs | 301 µs |
 | DeepEP V1 + amazon NVSHMEM | ~700 µs | ~720 µs | 602 µs | 561 µs |
-| DeepEP V2 (`deepep-v2-uccl-style/` decode) | — | — | 1690 µs | 1700 µs |
+| DeepEP V2 (`deepep-v2-uccl-style/` decode) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs |
 
-UCCL's two bench modes report consistent numbers (~210 µs dispatch,
-~310 µs combine) — the difference is just statistic format. The
-**`run_ll_pplx_style.sh` row uses pplx-garden's own measurement
+UCCL's two bench modes report consistent numbers on p5en (~210 µs
+dispatch, ~310 µs combine) — the difference is just statistic format.
+On p5 the two methods diverge more (3200 vs 1281 µs dispatch) because
+EFA v1 has a longer tail; the pplx-style p50 strips outliers.
+
+The **`run_ll_pplx_style.sh` row uses pplx-garden's own measurement
 methodology** (warmup + repeats, p50 over end-to-end), which lets you
 compare UCCL vs pplx-garden directly:
 
-- Dispatch is essentially **tied** (212 vs 222 µs p50) — UCCL slightly
-  edges pplx by 4.5 %.
-- Combine: **pplx-garden wins** by 32 % (245 vs 324 µs p50).
+- **p5en**: dispatch is essentially tied (212 vs 222 µs p50) — UCCL
+  slightly edges pplx by 4.5 %; combine: pplx wins by 32 %.
+- **p5**: pplx-garden is clearly faster (402 vs 1281 µs dispatch — 3.2×;
+  517 vs 1428 µs combine — 2.8×). UCCL's RDMA stack scales much worse
+  on EFA v1 / 32 NICs than the libfabric stack pplx uses.
 
 **On p5en, UCCL-EP and pplx-garden are tied for fastest LL dispatch
 (207-224 µs)**, ~2.7-2.9× faster than DeepEP V1. **On p5, pplx-garden
@@ -167,6 +172,36 @@ much closer race, and the right answer depends on your workload shape.
   (`deepep-v1-efa/sweep_max_nic.sh`). Tuning is per-stack:
   `nets-per-gpu` for pplx-garden, `NVSHMEM_LIBFABRIC_MAX_NIC_PER_PE`
   for DeepEP V1, etc.
+
+## Pre-built images on Amazon ECR
+
+To skip the 5-20 min docker build on each node, pull pre-built images
+from the private ECR registry (account `579019700964`, region
+`us-east-2`):
+
+```bash
+ACCOUNT=579019700964
+REGION=us-east-2
+REGISTRY=$ACCOUNT.dkr.ecr.$REGION.amazonaws.com
+
+# One-time login (per node, on instances with the right IAM role)
+aws ecr get-login-password --region $REGION | \
+  docker login --username AWS --password-stdin $REGISTRY
+
+# Pull whichever image(s) you need
+docker pull $REGISTRY/ep-benchmarks-efa/deepep-v1-efa:dev
+docker pull $REGISTRY/ep-benchmarks-efa/uccl-ep-efa:dev
+docker pull $REGISTRY/ep-benchmarks-efa/deepep-v2-efa:dev
+docker pull $REGISTRY/ep-benchmarks-efa/pplx-garden-efa:dev
+
+# Re-tag locally so the launcher scripts (which use the short name) work
+for name in deepep-v1-efa uccl-ep-efa deepep-v2-efa pplx-garden-efa; do
+  docker tag $REGISTRY/ep-benchmarks-efa/$name:dev $name:dev
+done
+```
+
+Available tags: `:dev` (current build) and `:2026-05-17` (frozen
+snapshot for reproducibility).
 
 ## Reproducing on your own EFA cluster
 
