@@ -22,6 +22,9 @@ plugins, and tuning. This repo collects:
 
 ## What's in this repo
 
+⭐ = start here. 🔒 = **local-only, not committed** (bulk campaign artefacts); the row is
+kept for the record and its paths are intentionally not links.
+
 | Directory | Library | Backend | EFA support path |
 |---|---|---|---|
 | [`deepep-v1-efa/`](deepep-v1-efa/) | DeepEP V1 (`rauteric/DeepEP@remove-fence`) | NVSHMEM libfabric | amazon-contributing/upstream-to-nvshmem `devel_enriched` (libfabric remote transport, multi-NIC RR) |
@@ -32,7 +35,7 @@ plugins, and tuning. This repo collects:
 | [`deepep-v1-efa-b300/`](deepep-v1-efa-b300/) | DeepEP V1 (B300 variant) | NVSHMEM libfabric | adds `sm_100` to `CMAKE_CUDA_ARCHITECTURES` and `TORCH_CUDA_ARCH_LIST` |
 | [`uccl-ep-efa-b300/`](uccl-ep-efa-b300/) | UCCL-EP (B300 variant) | UCCL Rust RDMA stack | adds `10.0+PTX` to `TORCH_CUDA_ARCH_LIST`; **also requires the rdma.cpp fix from [uccl-project/uccl#950](https://github.com/uccl-project/uccl/pull/950)** which is applied at build-time on the patched `:dev`/`:b300` images |
 | [`deepep-v2-efa-b300/`](deepep-v2-efa-b300/) | DeepEP V2 (B300 variant) | NCCL Gin | adds `10.0` to `TORCH_CUDA_ARCH_LIST`, sets `EP_NIC_NAME=rdmap101s0` |
-| [`deepep-v2-efa-gdaki-b200/`](deepep-v2-efa-gdaki-b200/) | DeepEP V2 — **AWS EFA-team fork** (`Xuan-1998/DeepEP@dev`) | NCCL Gin (+ GDAKI) | EFA hybrid dispatch/combine kernels, GIN QP/context auto-tuner, dedicated proxy warp; source NCCL `v2.30.7-1` + aws-ofi-nccl `master --enable-gdaki`. Runs today on the stock EFA stack (non-GDAKI GIN); GDAKI additionally needs a **counting-event-capable host `efa.ko`**, which no container can supply |
+| `deepep-v2-efa-gdaki-b200/` 🔒 | DeepEP V2 — **AWS EFA-team fork** (`Xuan-1998/DeepEP@dev`) | NCCL Gin (+ GDAKI) | EFA hybrid dispatch/combine kernels, GIN QP/context auto-tuner, dedicated proxy warp; source NCCL `v2.30.7-1` + aws-ofi-nccl `master --enable-gdaki`. Runs today on the stock EFA stack (non-GDAKI GIN); GDAKI additionally needs a **counting-event-capable host `efa.ko`**, which no container can supply |
 | [`pplx-garden-efa-b300/`](pplx-garden-efa-b300/) | pplx-garden (B300 variant) | custom Rust libfabric | adds `10.3a+PTX` to `TORCH_CUDA_ARCH_LIST` and patches `p2p-all-to-all/a2a-kernels/build.rs` to emit `compute_103a/sm_103a` (upstream hardcodes `sm_100a` only, which fails at runtime on B300's `sm_103`) |
 | [`deepep-v2-efa-official/`](deepep-v2-efa-official/) ⭐ | DeepEP V2 — **public release** ([`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP)) | NCCL Gin + GDAKI | **Published packages only.** EFA installer **1.50.0** supplies efa.ko 3.3.0 + libfabric 2.6.0amzn1.0 + rdma-core 64.0amzn0 + aws-ofi-nccl 1.21.1 in one shot, so GDAKI comes up with **no source-built NCCL, no source-built aws-ofi-nccl, no patched kernel module, and none of the `NCCL_GIN_TYPE=5` / `FI_EFA_USE_HW_CNTR` / `OFI_NCCL_GIN_STRONG_SIGNAL` exports**. Same measured performance as the hand-built path |
 
@@ -40,7 +43,9 @@ plugins, and tuning. This repo collects:
 [`deepep-v2-efa-official/`](deepep-v2-efa-official/)** — it is the released stack on
 published packages and needs no patched components. `deepep-v2-efa-gdaki-b200/` remains
 the record of how the capability was brought up before 1.50.0 existed (and is still the
-home of the B200/B300 campaigns); `deepep-v2-efa/` builds upstream `deepseek-ai/DeepEP`
+home of the B200/B300 campaigns), but it is **🔒 local-only — kept out of git** because it
+is 673 MB of campaign artefacts; its paths below are deliberately not links.
+`deepep-v2-efa/` builds upstream `deepseek-ai/DeepEP`
 and predates GDAKI entirely. A full Chinese runbook — host install, image build, prefill
 bandwidth and decode latency tests, troubleshooting table — is at
 [`deepep-v2-efa-official/docs/runbook_zh.md`](deepep-v2-efa-official/docs/runbook_zh.md).
@@ -99,8 +104,8 @@ Absolute time at that matched config (24 SM, 8192 tok, both FP8): DeepEP V2+GDAK
 **978.8 µs dispatch / 1788.1 µs combine** vs UCCL-EP **1815 / 3421 µs** (a
 best-of over its chunk sweep) ⇒ **1.85× and 1.91× in DeepEP's favour**. Full
 methodology and the reproduced-vs-stale audit of this table:
-[`deepep-v2-efa-gdaki-b200/results/b300_20260813/UCCL_H2H_README.md`](deepep-v2-efa-gdaki-b200/results/b300_20260813/UCCL_H2H_README.md)
-and [`deepep-v2-efa-gdaki-b200/docs/b300_实测报告_zh.md`](deepep-v2-efa-gdaki-b200/docs/b300_实测报告_zh.md).
+`deepep-v2-efa-gdaki-b200/results/b300_20260813/UCCL_H2H_README.md` and
+`deepep-v2-efa-gdaki-b200/docs/b300_实测报告_zh.md` (🔒 local-only).
 **The UCCL-EP row itself was re-checked on today's EFA stack and reproduces
 within 5%** (4096 tok BF16: 94.42 vs 90.03 dispatch, 56.93 vs 58.99 combine) —
 only the DeepEP V2 GIN row was stale.
