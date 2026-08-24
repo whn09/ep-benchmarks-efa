@@ -98,7 +98,8 @@ dispatch number** in the struck-through cell. Config differences you must carry:
 dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8 dispatch, 12 SM**
 (81.25 GB/s = 1504 µs dispatch, 65.75 = 3592 µs combine, 399.8 MB per rank,
 `results/p5en_ours_20260813/summary.txt`; the released-package image measures
-72–75 GB/s / 1665 µs on the same args — see
+72–75 GB/s / 1665 µs on the same args, because it defaults to the **unordered** hybrid
+kernel where this row ran the **ordered** one — see
 [`deepep-v2-efa-official/`](deepep-v2-efa-official/) §Prefill for that 10.7% gap), and
 the GB/s is `test_ep.py`'s **SO** denominator. **SO counts intra-node destinations
 too, so halve it for a wire rate** — 125 GB/s SO = 62.5 GB/s of the 100 GB/s

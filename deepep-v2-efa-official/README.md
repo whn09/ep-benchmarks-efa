@@ -192,6 +192,13 @@ can't be found`, the helper logs `Failed to get RDMA connection speed:` and retu
 taken on `num_scaleout_ranks > 1`). **Single-node never triggers it** — it appears the
 moment you go multi-node.
 
+> **This is true of the `ec623f3` pin only — do not carry it to `main`.** The fix is
+> `a4f923c envs: probe RDMA link rate via sysfs, survive probe failure` (`e0f110a` on
+> `main`): it reads `/sys/class/infiniband/<nic>/ports/*/rate` first, keeps `ibstat` as a
+> fallback, and picks the fastest device when `EP_NIC_NAME` is unset. That commit is **not
+> in `ec623f3`** (`git log ec623f3..7a6059a3` shows it), so this pin still needs an explicit
+> `--num-sms`; on `main` the auto path works.
+
 **And `--num-sms` is not a free parameter.** It also changes the allocated QP count, and
 *non-monotonically*: measured 0→17 QPs, 12→5, 24→10. A value landing on
 `num_qps < num_ranks` **hangs outright** — the GIN auto-tuner prints its lines and then
@@ -267,8 +274,9 @@ reduced combine; dispatch shows no such split. **So never quote one node's range
 machine is slow flips between runs, so a single run cannot tell you whether this is an
 intrinsic leader-node effect — we draw no mechanism conclusion here.
 
-> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower and we do not yet
-> know why.** That run used source NCCL `2.30.7-1` + source aws-ofi-nccl `--enable-gdaki`
+> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower, because the two
+> runs are not the same kernel.** That run used source NCCL `2.30.7-1` + source
+> aws-ofi-nccl `--enable-gdaki`
 > + DeepEP `7a6059a3`; its `test_ep.py` args are byte-identical to §"Run" apart from an
 > extra `--skip-check`, same `use_fp8_dispatch=1`, same 399.8 MB per rank, same two nodes.
 >
@@ -283,14 +291,56 @@ intrinsic leader-node effect — we draw no mechanism conclusion here.
 > This is not a broad slowdown — combine barely moves and **all three dispatch variants
 > collapse onto ≈1664 µs**. On 08-13 `dispatch` beat `cached dispatch` by 240 µs (AWS's own
 > reference likewise, 81.00 vs 69.94); here that gap is gone. So the accurate statement is
-> that *dispatch lost its advantage over cached dispatch* — and p5en's "cached is slower"
-> is itself the still-unexplained inversion (b200 is the other way round). The GIN layouts
-> also differ (08-13 `gin_context_cnt=5 / indexed_signals=49 / num_qp=5` vs `11 / 21 / 11`
-> here), and `kNumParts = constexpr_num_parts(kNumGinSignals, kNumSMs, kNumQPs, …)` feeds
-> **dispatch only, not combine**, which fits — it is the same lever PR #1 moves. Other
-> candidates: the DeepEP commit itself (`main` was force-rewritten; 3 of 4 base commits
-> changed patch-id) and `--skip-check`. **Not re-measured; no conclusion drawn.**
+> that *dispatch lost its advantage over cached dispatch*.
 > Raw data: `deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt` (🔒 local-only).
+
+**The two runs do not run the same kernel.** Everything below is verifiable from source, no
+hardware needed.
+
+`merge-base(7a6059a3, ec623f3) = af9a040` — the two commits are **not on one line**;
+`7a6059a3` has 26 commits `ec623f3` lacks and `ec623f3` has 9 that `7a6059a3` lacks. And
+`ec623f3` is titled `feat: add EP_HYBRID_KERNEL toggle between unordered and ordered
+kernels`; its body and `csrc/kernels/elastic/kernel_select.hpp:37-52` both make **unordered
+the default** (empty env ⇒ unordered). `7a6059a3` predates the toggle and has only the one
+kernel — the one later named `ordered`.
+
+| | `ordered` (what 08-13 ran) | `unordered` (the default here) |
+|---|---|---|
+| How the receiver knows data landed | sender publishes a trailing tail signal; receiver **assumes everything before the tail has landed** | every part carries an **in-band header** + counting signal |
+| What it demands of the network | **strong signals + VA signals** (ordered delivery) | assumes no delivery order; **weak signal suffices** |
+| GIN config | `csrc/kernels/backend/nccl.cu:111-127`: 129 exclusive contexts, depth-1024 rings, `ginSignalCount = num_ranks+4`, `ginVaSignalsRequired=true`, `ginStrongSignalsRequired=true` | the auto path (below) |
+
+The 08-13 route-B environment **did set `OFI_NCCL_GIN_STRONG_SIGNAL=1`** — exactly what
+`ordered` requires; §Run here sets no environment at all, so it runs `unordered`. That also
+explains why **only dispatch moved and why all three dispatch variants collapsed onto one
+number**: `ordered`'s publish-a-tail-and-assume is precisely where plain dispatch got its
+head start over cached dispatch, while `unordered` reads an in-band header per part, so all
+three paths pay the same.
+
+**`num_qp` 5 vs 11 rides along with that change; it is not an independent variable.** Both
+sides are computable from source and match the logs digit for digit:
+
+| | how it is derived | at 12 SM | log |
+|---|---|---|---|
+| `7a6059a3` | `nccl.cu:126-129` calls `compute_gin_resources(num_max_sms × kMaxWarpsPerSM = 12×4 = 48)`; contexts = `ceil_div(48, kMinGinContextSharingFactor=10)`; signals = `(256 − 2·ctx)/ctx` | 5 ctx / 49 signals (**SM-dependent**) | `5 / 49 / 5` ✅ |
+| `ec623f3` | `kMinGinContextSharingFactor` deleted; the auto path is now the constant `gin_resource_alloc.cuh: kDefaultGinContextCnt = 11` | 11 ctx / 21 signals (**SM-independent**) | `11 / 21 / 11` ✅ |
+
+**Two earlier guesses are refuted by source — do not cite them:**
+
+- **`kNumParts` is not the mechanism.** `ec623f3`'s own comment lists the equivalents of 11
+  as `{5, 6, 7, 8, 9, 14}` and says "everything else loses a part somewhere" — so by the
+  author's own accounting 5 and 11 yield the **same part count** at 12 SM.
+- **It is not "the new branch lost the tuning".** Front-loading (`kMidTotal`) and the
+  forward double-buffer (`kNumDispatchFwdBuffers`) are both **already ported into
+  `hybrid_dispatch_unordered.cuh`**. The gap is the synchronization scheme itself.
+
+**Still unconfirmed (needs p5en/H200 GDAKI hardware):** whether running this same image with
+`-e EP_HYBRID_KERNEL=ordered -e OFI_NCCL_GIN_STRONG_SIGNAL=1` pulls dispatch back to
+~1504 µs. No rebuild is required — the selection happens at JIT-generation time and the two
+variants key their JIT caches apart. **One caveat:** we measured earlier that the `ordered`
+variant is *incorrect* on EFA; if it fails its correctness pass, that is itself the answer —
+the 10.7% buys correctness on a weakly-ordered fabric and is a **deliberate trade, not a
+regression**. Run `--skip-check` as a control in the same session.
 
 ### Decode (`--num-tokens=128`) — latency. The release is slow; two PRs are pending
 

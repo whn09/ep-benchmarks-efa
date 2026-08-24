@@ -222,6 +222,13 @@ ZeroDivisionError: float division by zero
 
 `--num-sms 0`（默认=自动）→ `get_theoretical_num_sms()` → `get_rdma_gbs()` → `subprocess.run(['ibstat'])` 抓 `CA '<nic>' ... Rate: N`。而 `ibstat` 走 libibumad，EFA 没有 `ib_umad`：`ibstat rdmap85s0` → `ibpanic: ... IB device can't be found`。于是打一行 `Failed to get RDMA connection speed:` 返回 0；第 824 行的分母保护写的是 `num_rdma_ranks > 1`、判断却用 `num_scaleout_ranks > 1`，两者不一致 ⇒ 除零。**单机不触发**，只在上多机那一刻出现。
 
+> **这条只对本文钉的 `ec623f3` 成立，别照搬到 `main`。** 修复是
+> `a4f923c envs: probe RDMA link rate via sysfs, survive probe failure`（在 `main` 上是
+> `e0f110a`）：先读 `/sys/class/infiniband/<nic>/ports/*/rate`，`ibstat` 只作 fallback，且
+> `EP_NIC_NAME` 未设时自己挑最快的设备。该 commit **不在 `ec623f3` 里**（`git log
+> ec623f3..7a6059a3` 可见），所以我们这个 pin 仍然必须显式给 `--num-sms`；换到 `main` 之后
+> 自动探测就能用了。
+
 **而且 `--num-sms` 不是自由参数。** 它会连带改实际分配的 QP 数，且**非单调**（实测 0→17 QP、12→5、24→10），落到 `num_qps < num_ranks` 的档位会**直接挂死**（GIN auto-tuner 打完那几行就再无输出，600 s 超时）。本文 16 rank / 12 SM 这档是好的（`num_qp=11`）。要和别人对比就固定在官方那三个工作点：**H200 2 节点 12 SM / H200 4 节点 6 SM / B200 2 节点 12 SM**。
 
 ### 4.3 日志里必须出现的 GIN 证据
@@ -290,7 +297,7 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 慢的那一侧整 8 个 rank 的 combine 都慢约 700 µs（**+21%**），reduced combine 慢约 8%；dispatch 没有这个分层。
 **所以别只引一台机器的区间。** 哪台慢在不同次运行里是反过来的，单跑分不出是不是 master 节点的固有效应，这里不下机制结论。
 
-> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%，未定论）**
+> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%）**
 >
 > 那一轮是手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 + DeepEP `7a6059a3`，args 和
 > §4.2 逐字相同、只多一个 `--skip-check`，同样 `use_fp8_dispatch=1` / 399.8 MB 每 rank：
@@ -306,13 +313,48 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 > 不是整体变慢：combine 两侧基本重合，变的只有 dispatch 路径，而且**三个 dispatch 变体
 > 全部收敛到 ≈1664 µs**。08-13 时 `dispatch` 比 `cached dispatch` 快 240 µs（AWS 参考也一样，
 > 81.00 vs 69.94），正式包上这个差值消失了 —— 所以更准确的说法是 *dispatch 丢掉了它相对
-> cached dispatch 的优势*，而 p5en 上"cached 反而慢"本身就是至今没解释的反常（b200 上是反的）。
-> 两侧 GIN layout 也不同（08-13 `gin_context_cnt=5 / indexed_signals=49 / num_qp=5`，
-> 本文 `11 / 21 / 11`），而 `kNumParts = constexpr_num_parts(kNumGinSignals, kNumSMs, kNumQPs, …)`
-> **只喂 dispatch、不喂 combine**，和现象吻合，也正是 PR #1 动的杠杆。候选原因还包括
-> DeepEP commit 本身（`main` 被 force-push 重写过，3/4 个 base commit 的 patch-id 变了）
-> 和 `--skip-check`。**未复测，不下结论。**
+> cached dispatch 的优势*。
 > 原始数据：`deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt`（🔒 本机）。
+
+**这两轮跑的不是同一个 kernel** —— 以下全部可从源码核实，无需机器。
+
+`merge-base(7a6059a3, ec623f3) = af9a040`：两个 commit **不在一条线上**，`7a6059a3` 独有 26 个
+commit，`ec623f3` 独有 9 个。而 `ec623f3` 的标题就是 `feat: add EP_HYBRID_KERNEL toggle between
+unordered and ordered kernels`，commit body 与 `csrc/kernels/elastic/kernel_select.hpp:37-52`
+都写明 **unordered 是 default**（env 为空即 unordered）。`7a6059a3` 早于这个 toggle，只有一套
+kernel —— 就是后来被命名为 `ordered` 的那套。
+
+| | `ordered`（= 08-13 跑的） | `unordered`（= 本文 default） |
+|---|---|---|
+| 收端如何确认数据到达 | 发端 publish 一个 trailing tail signal，收端**假定 tail 之前的全部已落地** | 每个 part 带 **in-band header** + counting signal |
+| 对网络的要求 | 需要 **strong signal + VA signal**（有序传输） | 不假设投递顺序，**weak signal 就够** |
+| GIN 配置 | `csrc/kernels/backend/nccl.cu:111-127`：129 个 exclusive context、depth-1024 ring、`ginSignalCount = num_ranks+4`、`ginVaSignalsRequired=true`、`ginStrongSignalsRequired=true` | 走 auto path（下表） |
+
+08-13 那轮 route B 的 env 里**正好有 `OFI_NCCL_GIN_STRONG_SIGNAL=1`**，就是 ordered 需要的那个；
+本文 §4.2 一个 env 都不设，所以跑的是 unordered。这也解释了为什么**只有 dispatch 动、而且三个
+dispatch 变体塌成同一个数**：ordered 的"发 tail、收端假定前面都到了"正是 plain dispatch 领先
+cached dispatch 的来源；unordered 每个 part 都要读 in-band header，三条路径就都付一样的钱。
+
+**`num_qp` 5 vs 11 是这次换代的伴生结果，不是独立变量**，两边都能从源码算出来、和日志逐位吻合：
+
+| | 算法 | 12 SM 的结果 | 日志 |
+|---|---|---|---|
+| `7a6059a3` | `nccl.cu:126-129` 用 `num_max_sms × kMaxWarpsPerSM = 12×4 = 48` 调 `compute_gin_resources()`；`ceil_div(48, kMinGinContextSharingFactor=10)` → context 数；signal = `(256 − 2·ctx)/ctx` | 5 ctx / 49 signal（**随 SM 变**） | `5 / 49 / 5` ✅ |
+| `ec623f3` | `kMinGinContextSharingFactor` 已删除，auto path 改成固定常量 `gin_resource_alloc.cuh: kDefaultGinContextCnt = 11` | 11 ctx / 21 signal（**与 SM 无关**） | `11 / 21 / 11` ✅ |
+
+**两个曾经的猜测已被源码否掉，不要再引用：**
+
+- `kNumParts` 不是机制。`ec623f3` 自己的注释写着 11 的等价选项是 `{5, 6, 7, 8, 9, 14}`、
+  "everything else loses a part somewhere" —— 按作者自己的账，12 SM 下 5 和 11 **给出相同的
+  part 数**。
+- 不是"新分支少了调优"。front-loading（`kMidTotal`）和 forward double-buffer
+  （`kNumDispatchFwdBuffers`）都**已经移植进 `hybrid_dispatch_unordered.cuh`**。差距在同步方案本身。
+
+**还没确认的（等 p5en 机器）：** 正式包镜像加 `-e EP_HYBRID_KERNEL=ordered
+-e OFI_NCCL_GIN_STRONG_SIGNAL=1` 是否把 dispatch 拉回 ~1504 µs（不用重 build，只是 JIT 换个
+变体，两个 kernel 的 JIT cache key 本来就分开）。**注意前提**：我们早前测到 ordered 变体在 EFA 上
+结果不正确；若它 correctness 挂了，那本身就是答案 —— 这 10.7% 买的是弱序 fabric 上的正确性，
+是**有意的取舍而非回归**。`--skip-check` 作为对照也顺手跑一轮排掉。
 
 ### 5.2 Decode（`--num-tokens=128`）— 延迟。**正式版偏慢，两个 PR 待合**
 
