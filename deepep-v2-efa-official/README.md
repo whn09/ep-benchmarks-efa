@@ -274,8 +274,8 @@ reduced combine; dispatch shows no such split. **So never quote one node's range
 machine is slow flips between runs, so a single run cannot tell you whether this is an
 intrinsic leader-node effect — we draw no mechanism conclusion here.
 
-> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower, because the two
-> runs are not the same kernel.** That run used source NCCL `2.30.7-1` + source
+> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower. It is the same
+> kernel; what differs is the GIN QP layout.** That run used source NCCL `2.30.7-1` + source
 > aws-ofi-nccl `--enable-gdaki`
 > + DeepEP `7a6059a3`; its `test_ep.py` args are byte-identical to §"Run" apart from an
 > extra `--skip-check`, same `use_fp8_dispatch=1`, same 399.8 MB per rank, same two nodes.
@@ -294,53 +294,76 @@ intrinsic leader-node effect — we draw no mechanism conclusion here.
 > that *dispatch lost its advantage over cached dispatch*.
 > Raw data: `deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt` (🔒 local-only).
 
-**The two runs do not run the same kernel.** Everything below is verifiable from source, no
-hardware needed.
+**It is the same kernel — established at blob level, not from commit messages.** Everything
+below is verifiable from source, no hardware needed. At `ec623f3` the hybrid dispatch kernel
+exists twice (`ec623f3` = `feat: add EP_HYBRID_KERNEL toggle between unordered and ordered
+kernels`, `unordered` the default per `csrc/kernels/elastic/kernel_select.hpp:37-52`), and
+comparing blobs settles which is which:
 
-`merge-base(7a6059a3, ec623f3) = af9a040` — the two commits are **not on one line**;
-`7a6059a3` has 26 commits `ec623f3` lacks and `ec623f3` has 9 that `7a6059a3` lacks. And
-`ec623f3` is titled `feat: add EP_HYBRID_KERNEL toggle between unordered and ordered
-kernels`; its body and `csrc/kernels/elastic/kernel_select.hpp:37-52` both make **unordered
-the default** (empty env ⇒ unordered). `7a6059a3` predates the toggle and has only the one
-kernel — the one later named `ordered`.
-
-| | `ordered` (what 08-13 ran) | `unordered` (the default here) |
+| file at `ec623f3` | vs `af9a040:hybrid_dispatch.cuh` (pre-fork upstream) | vs `7a6059a3:hybrid_dispatch.cuh` (what 08-13 ran) |
 |---|---|---|
-| How the receiver knows data landed | sender publishes a trailing tail signal; receiver **assumes everything before the tail has landed** | every part carries an **in-band header** + counting signal |
-| What it demands of the network | **strong signals + VA signals** (ordered delivery) | assumes no delivery order; **weak signal suffices** |
-| GIN config | `csrc/kernels/backend/nccl.cu:111-127`: 129 exclusive contexts, depth-1024 rings, `ginSignalCount = num_ranks+4`, `ginVaSignalsRequired=true`, `ginStrongSignalsRequired=true` | the auto path (below) |
+| `hybrid_dispatch.cuh` — the `ordered` variant | **+6 / −1** | +56 / −468 |
+| `hybrid_dispatch_unordered.cuh` — **the default** | +485 / −51 | **+45 / −28** (11 of them the license header) |
 
-The 08-13 route-B environment **did set `OFI_NCCL_GIN_STRONG_SIGNAL=1`** — exactly what
-`ordered` requires; §Run here sets no environment at all, so it runs `unordered`. That also
-explains why **only dispatch moved and why all three dispatch variants collapsed onto one
-number**: `ordered`'s publish-a-tail-and-assume is precisely where plain dispatch got its
-head start over cached dispatch, while `unordered` reads an in-band header per part, so all
-three paths pay the same.
+So `unordered` **is** `7a6059a3`'s kernel — the AWS EFA GDA port — under a new name, and
+`ordered` is the upstream kernel this branch forked from, carried along nearly verbatim.
+Combine tells the same story (`+12/−6` vs `+24/−7`). The entire functional content of that
++45/−28: a new `num_unaligned_recv_tokens_per_expert` output pointer (one store per expert),
+two lambdas hoisted out of the two warp branches, the identity lambda `phys_token_slot`
+dropped, and comments.
 
-**`num_qp` 5 vs 11 rides along with that change; it is not an independent variable.** Both
-sides are computable from source and match the logs digit for digit:
+⇒ **"The two runs are not the same kernel" is retracted, and `EP_HYBRID_KERNEL=ordered` is
+not the A/B to run.** That flag selects the *upstream* kernel, which publishes a tail signal
+and lets the receiver assume everything before it landed — we measured earlier that this is
+**incorrect on EFA GDAKI** (`NCCL_GIN_TYPE=5`, where the signal can overtake the data); it is
+only correct on the ordered proxy path. It also asks NCCL for a different fabric altogether
+(`csrc/kernels/backend/nccl.cu:111-127`: 129 **exclusive** contexts, `ginSignalCount =
+num_ranks + 4`, `ginVaSignalsRequired`, `ginStrongSignalsRequired`), so it would not be a
+one-variable change even if it were correct.
 
-| | how it is derived | at 12 SM | log |
-|---|---|---|---|
-| `7a6059a3` | `nccl.cu:126-129` calls `compute_gin_resources(num_max_sms × kMaxWarpsPerSM = 12×4 = 48)`; contexts = `ceil_div(48, kMinGinContextSharingFactor=10)`; signals = `(256 − 2·ctx)/ctx` | 5 ctx / 49 signals (**SM-dependent**) | `5 / 49 / 5` ✅ |
-| `ec623f3` | `kMinGinContextSharingFactor` deleted; the auto path is now the constant `gin_resource_alloc.cuh: kDefaultGinContextCnt = 11` | 11 ctx / 21 signals (**SM-independent**) | `11 / 21 / 11` ✅ |
+**And the 26-vs-9 commit divergence is mostly SHA-level.** `merge-base(7a6059a3, ec623f3) =
+af9a040`; `7a6059a3` carries 26 commits `ec623f3` lacks and `ec623f3` has 9 the pin lacks.
+But by *content* that is largely the same work rebased: `qp_mapping.cuh` — where `7a6059a`,
+the pin's own tip commit, put "perf(gin): Balanced contiguous QP-channel mapping" — differs
+by **+10 / −0, all of it the license header**. Count commits to date a branch, never to date
+a behaviour.
 
-**Two earlier guesses are refuted by source — do not cite them:**
+**That leaves exactly one substantive difference in the dispatch path:
+`gin_resource_alloc.cuh` (+80 / −50), the context-count policy.** Both sides are computable
+from source at 12 SM / 4 channels per SM / 16 ranks, and both reproduce their logged line
+digit for digit:
 
-- **`kNumParts` is not the mechanism.** `ec623f3`'s own comment lists the equivalents of 11
-  as `{5, 6, 7, 8, 9, 14}` and says "everything else loses a part somewhere" — so by the
-  author's own accounting 5 and 11 yield the **same part count** at 12 SM.
-- **It is not "the new branch lost the tuning".** Front-loading (`kMidTotal`) and the
-  forward double-buffer (`kNumDispatchFwdBuffers`) are both **already ported into
-  `hybrid_dispatch_unordered.cuh`**. The gap is the synchronization scheme itself.
+| | contexts (= QPs) | signals/ctx | data QPs (= ctx − 1 notify) | channels/ctx | `kNumParts` | channels/SM | logged |
+|---|---|---|---|---|---|---|---|
+| `7a6059a3` (08-13) | `ceil_div(12×4, kMinGinContextSharingFactor=10)` = **5**, so **SM-dependent** | `(256 − 2·5)/5` = 49 | 4 | `ceil(48/4)` = 12 | `49/12` → **4** | 4 | `5 / 49 / 5` ✅ |
+| `ec623f3` (here) | `kMinGinContextSharingFactor` deleted; auto path is the constant `kDefaultGinContextCnt` = **11**, **SM-independent** | `(256 − 2·11)/11` = 21 | 10 | `ceil(48/10)` = 5 | `21/5` → **4** | 4 | `11 / 21 / 11` ✅ |
 
-**Still unconfirmed (needs p5en/H200 GDAKI hardware):** whether running this same image with
-`-e EP_HYBRID_KERNEL=ordered -e OFI_NCCL_GIN_STRONG_SIGNAL=1` pulls dispatch back to
-~1504 µs. No rebuild is required — the selection happens at JIT-generation time and the two
-variants key their JIT caches apart. **One caveat:** we measured earlier that the `ordered`
-variant is *incorrect* on EFA; if it fails its correctness pass, that is itself the answer —
-the 10.7% buys correctness on a weakly-ordered fabric and is a **deliberate trade, not a
-regression**. Run `--skip-check` as a control in the same session.
+**Note what does not change: `kNumParts = 4` and 48 channels on both sides**, so the kernel
+is instantiated with identical template arguments. The only live difference is how many QPs
+those same 48 channels are spread across — **4 QPs × 12 channels (08-13) vs 10 QPs × 5
+channels (release)** — and that is now the single remaining code-level candidate for the
+10.7%. The shape of the data is at least consistent with it: plain dispatch lost 161 µs while
+cached dispatch *gained* 80 µs.
+
+**Two earlier guesses are refuted — do not cite them:**
+
+- **`kNumParts` is not the mechanism.** Computed above from `compute_part_allocation()`
+  (`gin_resource_alloc.cuh:122-152`): **4 on both sides**. `ec623f3`'s own comment agrees,
+  listing 11's equivalents as `{5, 6, 7, 8, 9, 14}`.
+- **It is not "the new branch lost the tuning".** Front-loading (`kMidTotal`) and the forward
+  double-buffer (`kNumDispatchFwdBuffers`) are both present in
+  `hybrid_dispatch_unordered.cuh` — necessarily, since that file *is* `7a6059a3`'s kernel.
+
+**Still unconfirmed (needs p5en/H200 GDAKI hardware) — but it is now a one-flag test.**
+`ec623f3` adds `--num-allocated-qps` / `--num-qps` to `tests/elastic/test_ep.py`
+(`7a6059a3` had neither — the count was derived). Re-run §Run with
+**`--num-allocated-qps 5`** and the layout becomes 5 contexts / 49 signals / 4 data QPs,
+exactly 08-13's. If dispatch returns to ~1504 µs the QP fan-out is the whole story; if it
+does not, the suspects left are the stack (source NCCL `2.30.7-1` + source aws-ofi-nccl
+`--enable-gdaki` vs the packaged 1.50.0 libfabric `2.6.0amzn1.0`) and `--skip-check`. Neither
+arm needs a rebuild. `OFI_NCCL_GIN_STRONG_SIGNAL=1` was in 08-13's environment, but the
+unordered kernel only requires weak signals, so run it as its own arm rather than folding it
+into this one.
 
 ### Decode (`--num-tokens=128`) — latency. The release is slow; two PRs are pending
 

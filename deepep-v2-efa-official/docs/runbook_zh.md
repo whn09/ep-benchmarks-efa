@@ -297,7 +297,7 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 慢的那一侧整 8 个 rank 的 combine 都慢约 700 µs（**+21%**），reduced combine 慢约 8%；dispatch 没有这个分层。
 **所以别只引一台机器的区间。** 哪台慢在不同次运行里是反过来的，单跑分不出是不是 master 节点的固有效应，这里不下机制结论。
 
-> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%）**
+> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%；同一个 kernel，差的是 GIN QP 布局）**
 >
 > 那一轮是手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 + DeepEP `7a6059a3`，args 和
 > §4.2 逐字相同、只多一个 `--skip-check`，同样 `use_fp8_dispatch=1` / 399.8 MB 每 rank：
@@ -316,45 +316,64 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 > cached dispatch 的优势*。
 > 原始数据：`deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt`（🔒 本机）。
 
-**这两轮跑的不是同一个 kernel** —— 以下全部可从源码核实，无需机器。
+**这两轮跑的是同一个 kernel** —— 结论按 blob 比出来的，不是读 commit message 猜的；以下全部
+可从源码核实，无需机器。`ec623f3` 的标题是 `feat: add EP_HYBRID_KERNEL toggle between
+unordered and ordered kernels`，`csrc/kernels/elastic/kernel_select.hpp:37-52` 写明 **unordered
+是 default**（env 为空即 unordered），于是这个 commit 里 hybrid dispatch kernel 有两份。比一下
+blob 就知道谁是谁：
 
-`merge-base(7a6059a3, ec623f3) = af9a040`：两个 commit **不在一条线上**，`7a6059a3` 独有 26 个
-commit，`ec623f3` 独有 9 个。而 `ec623f3` 的标题就是 `feat: add EP_HYBRID_KERNEL toggle between
-unordered and ordered kernels`，commit body 与 `csrc/kernels/elastic/kernel_select.hpp:37-52`
-都写明 **unordered 是 default**（env 为空即 unordered）。`7a6059a3` 早于这个 toggle，只有一套
-kernel —— 就是后来被命名为 `ordered` 的那套。
-
-| | `ordered`（= 08-13 跑的） | `unordered`（= 本文 default） |
+| `ec623f3` 里的文件 | vs `af9a040:hybrid_dispatch.cuh`（fork 之前的 upstream） | vs `7a6059a3:hybrid_dispatch.cuh`（= 08-13 跑的） |
 |---|---|---|
-| 收端如何确认数据到达 | 发端 publish 一个 trailing tail signal，收端**假定 tail 之前的全部已落地** | 每个 part 带 **in-band header** + counting signal |
-| 对网络的要求 | 需要 **strong signal + VA signal**（有序传输） | 不假设投递顺序，**weak signal 就够** |
-| GIN 配置 | `csrc/kernels/backend/nccl.cu:111-127`：129 个 exclusive context、depth-1024 ring、`ginSignalCount = num_ranks+4`、`ginVaSignalsRequired=true`、`ginStrongSignalsRequired=true` | 走 auto path（下表） |
+| `hybrid_dispatch.cuh` —— 即 `ordered` 变体 | **+6 / −1** | +56 / −468 |
+| `hybrid_dispatch_unordered.cuh` —— **default** | +485 / −51 | **+45 / −28**（其中 11 行是 license header） |
 
-08-13 那轮 route B 的 env 里**正好有 `OFI_NCCL_GIN_STRONG_SIGNAL=1`**，就是 ordered 需要的那个；
-本文 §4.2 一个 env 都不设，所以跑的是 unordered。这也解释了为什么**只有 dispatch 动、而且三个
-dispatch 变体塌成同一个数**：ordered 的"发 tail、收端假定前面都到了"正是 plain dispatch 领先
-cached dispatch 的来源；unordered 每个 part 都要读 in-band header，三条路径就都付一样的钱。
+所以 `unordered` **就是** `7a6059a3` 那套 kernel（AWS 的 EFA GDA 移植版）改了个名字，而 `ordered`
+是这个分支 fork 之前的 upstream kernel、几乎原样带着走。combine 同理（`+12/−6` vs `+24/−7`）。
+那 +45/−28 的全部实质内容是：多一个 `num_unaligned_recv_tokens_per_expert` 输出指针（每个 expert
+一次 store）、两个 lambda 从两个 warp 分支里提到外面、删掉恒等 lambda `phys_token_slot`，加注释。
 
-**`num_qp` 5 vs 11 是这次换代的伴生结果，不是独立变量**，两边都能从源码算出来、和日志逐位吻合：
+⇒ **"两轮不是同一个 kernel"这个说法作废，`EP_HYBRID_KERNEL=ordered` 也不是该跑的那个 A/B。**
+那个开关选的是 *upstream* kernel：发端 publish 一个 trailing tail signal、收端假定 tail 之前的全部
+已落地 —— 我们早前测过它在 **EFA GDAKI 上结果不正确**（`NCCL_GIN_TYPE=5`，signal 可能超过数据），
+只在有序的 proxy 路径上成立。而且它向 NCCL 要的是另一套 fabric（`csrc/kernels/backend/nccl.cu:111-127`：
+129 个 **exclusive** context、`ginSignalCount = num_ranks + 4`、`ginVaSignalsRequired`、
+`ginStrongSignalsRequired`），就算正确也不是单变量对照。
 
-| | 算法 | 12 SM 的结果 | 日志 |
-|---|---|---|---|
-| `7a6059a3` | `nccl.cu:126-129` 用 `num_max_sms × kMaxWarpsPerSM = 12×4 = 48` 调 `compute_gin_resources()`；`ceil_div(48, kMinGinContextSharingFactor=10)` → context 数；signal = `(256 − 2·ctx)/ctx` | 5 ctx / 49 signal（**随 SM 变**） | `5 / 49 / 5` ✅ |
-| `ec623f3` | `kMinGinContextSharingFactor` 已删除，auto path 改成固定常量 `gin_resource_alloc.cuh: kDefaultGinContextCnt = 11` | 11 ctx / 21 signal（**与 SM 无关**） | `11 / 21 / 11` ✅ |
+**26 vs 9 那个 commit 分叉，大部分只是 SHA 层面的。** `merge-base(7a6059a3, ec623f3) = af9a040`，
+`7a6059a3` 独有 26 个 commit、`ec623f3` 独有 9 个；但按**内容**看那多半是同一批活 rebase 过：
+`qp_mapping.cuh` —— 也就是 pin 自己的 tip commit `7a6059a` "perf(gin): Balanced contiguous
+QP-channel mapping" 落地的地方 —— 两版只差 **+10 / −0，全是 license header**。commit 数只能定
+分支，不能定行为。
+
+**这样只剩下 dispatch 路径上唯一一处实质差异：`gin_resource_alloc.cuh`（+80 / −50），即 context
+数的策略。** 两边在 12 SM / 每 SM 4 channel / 16 rank 下都能从源码算出来，且和各自日志逐位吻合：
+
+| | context 数（= QP 数） | signal/ctx | data QP（= ctx − 1 个 notify） | channel/ctx | `kNumParts` | channel/SM | 日志 |
+|---|---|---|---|---|---|---|---|
+| `7a6059a3`（08-13） | `ceil_div(12×4, kMinGinContextSharingFactor=10)` = **5**，**随 SM 变** | `(256 − 2·5)/5` = 49 | 4 | `ceil(48/4)` = 12 | `49/12` → **4** | 4 | `5 / 49 / 5` ✅ |
+| `ec623f3`（本文） | `kMinGinContextSharingFactor` 已删除，auto path 改成固定常量 `kDefaultGinContextCnt` = **11**，**与 SM 无关** | `(256 − 2·11)/11` = 21 | 10 | `ceil(48/10)` = 5 | `21/5` → **4** | 4 | `11 / 21 / 11` ✅ |
+
+**注意没变的东西：两边都是 `kNumParts = 4`、48 个 channel**，也就是 kernel 的模板实参完全一样。
+唯一活着的差别是这 48 个 channel 摊在多少个 QP 上 —— **08-13 是 4 QP × 12 channel，正式包是
+10 QP × 5 channel** —— 这也就成了 10.7% 目前唯一剩下的代码级候选。数据的形状至少与它不矛盾：
+plain dispatch 慢了 161 µs，而 cached dispatch **快了** 80 µs。
 
 **两个曾经的猜测已被源码否掉，不要再引用：**
 
-- `kNumParts` 不是机制。`ec623f3` 自己的注释写着 11 的等价选项是 `{5, 6, 7, 8, 9, 14}`、
-  "everything else loses a part somewhere" —— 按作者自己的账，12 SM 下 5 和 11 **给出相同的
-  part 数**。
+- `kNumParts` 不是机制。上表按 `compute_part_allocation()`（`gin_resource_alloc.cuh:122-152`）
+  算出来**两边都是 4**；`ec623f3` 自己的注释也这么说（11 的等价选项 `{5, 6, 7, 8, 9, 14}`）。
 - 不是"新分支少了调优"。front-loading（`kMidTotal`）和 forward double-buffer
-  （`kNumDispatchFwdBuffers`）都**已经移植进 `hybrid_dispatch_unordered.cuh`**。差距在同步方案本身。
+  （`kNumDispatchFwdBuffers`）都在 `hybrid_dispatch_unordered.cuh` 里 —— 这是必然的，因为那个文件
+  **就是** `7a6059a3` 的 kernel。
 
-**还没确认的（等 p5en 机器）：** 正式包镜像加 `-e EP_HYBRID_KERNEL=ordered
--e OFI_NCCL_GIN_STRONG_SIGNAL=1` 是否把 dispatch 拉回 ~1504 µs（不用重 build，只是 JIT 换个
-变体，两个 kernel 的 JIT cache key 本来就分开）。**注意前提**：我们早前测到 ordered 变体在 EFA 上
-结果不正确；若它 correctness 挂了，那本身就是答案 —— 这 10.7% 买的是弱序 fabric 上的正确性，
-是**有意的取舍而非回归**。`--skip-check` 作为对照也顺手跑一轮排掉。
+**还没确认的（等 p5en 机器），而且现在只是一个 flag 的事：** `ec623f3` 给
+`tests/elastic/test_ep.py` 加了 `--num-allocated-qps` / `--num-qps` 两个参数（`7a6059a3` 上没有，
+QP 数是算出来的）。把 §4.2 那条命令加上 **`--num-allocated-qps 5`**，布局就变成 5 context /
+49 signal / 4 data QP，和 08-13 完全一致。如果 dispatch 回到 ~1504 µs，那 QP fan-out 就是全部原因；
+如果没回去，剩下的嫌疑只有软件栈（手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 vs 正式包
+1.50.0 的 libfabric `2.6.0amzn1.0`）和 `--skip-check`。两个 arm 都不用重 build。
+`OFI_NCCL_GIN_STRONG_SIGNAL=1` 确实在 08-13 的 env 里，但 unordered kernel 只要 weak signal，
+所以把它当独立的一个 arm 单独跑，别混进这一条。
 
 ### 5.2 Decode（`--num-tokens=128`）— 延迟。**正式版偏慢，两个 PR 待合**
 
