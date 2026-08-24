@@ -366,10 +366,13 @@ plain dispatch 慢了 161 µs，而 cached dispatch **快了** 80 µs。
   （`kNumDispatchFwdBuffers`）都在 `hybrid_dispatch_unordered.cuh` 里 —— 这是必然的，因为那个文件
   **就是** `7a6059a3` 的 kernel。
 
-**还没确认的（等 p5en 机器），而且现在只是一个 flag 的事：** `ec623f3` 给
-`tests/elastic/test_ep.py` 加了 `--num-allocated-qps` / `--num-qps` 两个参数（`7a6059a3` 上没有，
-QP 数是算出来的）。把 §4.2 那条命令加上 **`--num-allocated-qps 5`**，布局就变成 5 context /
-49 signal / 4 data QP，和 08-13 完全一致。如果 dispatch 回到 ~1504 µs，那 QP fan-out 就是全部原因；
+**还没确认的（等 p5en 机器），而且现在只是一个 flag 的事：** 两个 commit 的
+`tests/elastic/test_ep.py` 都有 `--num-allocated-qps` / `--num-qps`，变的是这个参数的**语义**。
+`7a6059a3` 上请求值会被按 SM 算出来的 context 数**从上面截断**（`nccl.cu:172-179` 打个 warning
+然后压回去），所以 12 SM 下 5 是上限、5→11 那个方向根本走不到；`ec623f3` 上请求值**直接替换**
+默认值，只受 `[kMinGinContextCnt=2, kMaxGinContextCnt=17]` 约束（`nccl.cu:129-137`）。所以把
+§4.2 那条命令加上 **`--num-allocated-qps 5`**，布局就变成 5 context / 49 signal / 4 data QP，
+和 08-13 完全一致。如果 dispatch 回到 ~1504 µs，那 QP fan-out 就是全部原因；
 如果没回去，剩下的嫌疑只有软件栈（手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 vs 正式包
 1.50.0 的 libfabric `2.6.0amzn1.0`）和 `--skip-check`。两个 arm 都不用重 build。
 `OFI_NCCL_GIN_STRONG_SIGNAL=1` 确实在 08-13 的 env 里，但 unordered kernel 只要 weak signal，

@@ -355,10 +355,13 @@ cached dispatch *gained* 80 µs.
   `hybrid_dispatch_unordered.cuh` — necessarily, since that file *is* `7a6059a3`'s kernel.
 
 **Still unconfirmed (needs p5en/H200 GDAKI hardware) — but it is now a one-flag test.**
-`ec623f3` adds `--num-allocated-qps` / `--num-qps` to `tests/elastic/test_ep.py`
-(`7a6059a3` had neither — the count was derived). Re-run §Run with
-**`--num-allocated-qps 5`** and the layout becomes 5 contexts / 49 signals / 4 data QPs,
-exactly 08-13's. If dispatch returns to ~1504 µs the QP fan-out is the whole story; if it
+Both commits expose `--num-allocated-qps` / `--num-qps` in `tests/elastic/test_ep.py`; what
+changed is what the flag *means*. At `7a6059a3` the request is capped by the SM-derived
+context count (`nccl.cu:172-179` warns and overrides it down), so at 12 SM 5 was a ceiling
+and the 5→11 direction was not reachable. At `ec623f3` the request **replaces** the default,
+bounded only by `[kMinGinContextCnt=2, kMaxGinContextCnt=17]` (`nccl.cu:129-137`). So re-run
+§Run with **`--num-allocated-qps 5`** and the layout becomes 5 contexts / 49 signals / 4 data
+QPs, exactly 08-13's. If dispatch returns to ~1504 µs the QP fan-out is the whole story; if it
 does not, the suspects left are the stack (source NCCL `2.30.7-1` + source aws-ofi-nccl
 `--enable-gdaki` vs the packaged 1.50.0 libfabric `2.6.0amzn1.0`) and `--skip-check`. Neither
 arm needs a rebuild. `OFI_NCCL_GIN_STRONG_SIGNAL=1` was in 08-13's environment, but the
