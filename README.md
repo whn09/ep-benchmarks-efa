@@ -94,7 +94,12 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 † **The `DeepEP V2 + GIN` row above is obsolete — do not quote it.** It is the
 CPU-proxy path from 2026-05. The GDAKI row replaces it and is **~30× the b300
 dispatch number** in the struck-through cell. Config differences you must carry:
-the GDAKI b300 cells are **8192 tokens, FP8 dispatch, 24 SM** (not 4096/BF16), and
+**no cell in the GDAKI row is 4096/BF16** — the b300 cells are **8192 tokens, FP8
+dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8 dispatch, 12 SM**
+(81.25 GB/s = 1504 µs dispatch, 65.75 = 3592 µs combine, 399.8 MB per rank,
+`results/p5en_ours_20260813/summary.txt`; the released-package image measures
+72–75 GB/s / 1665 µs on the same args — see
+[`deepep-v2-efa-official/`](deepep-v2-efa-official/) §Prefill for that 10.7% gap), and
 the GB/s is `test_ep.py`'s **SO** denominator. **SO counts intra-node destinations
 too, so halve it for a wire rate** — 125 GB/s SO = 62.5 GB/s of the 100 GB/s
 per-GPU wire. UCCL's `GB/s (RDMA)` in the row above uses the **same** denominator

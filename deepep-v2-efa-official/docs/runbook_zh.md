@@ -290,7 +290,29 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 慢的那一侧整 8 个 rank 的 combine 都慢约 700 µs（**+21%**），reduced combine 慢约 8%；dispatch 没有这个分层。
 **所以别只引一台机器的区间。** 哪台慢在不同次运行里是反过来的，单跑分不出是不是 master 节点的固有效应，这里不下机制结论。
 
-> 和旧的"手编 NCCL + 手编插件"路径对得上：同工作点旧路径测到 cached dispatch 72.28 / combine 70.39 / reduced combine 59.60 GB/s（SO，9 reps 均值），本文正式包路径 73–74 / 60–73 / 52–59。**正式包路径没有付性能代价。**
+> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%，未定论）**
+>
+> 那一轮是手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 + DeepEP `7a6059a3`，args 和
+> §4.2 逐字相同、只多一个 `--skip-check`，同样 `use_fp8_dispatch=1` / 399.8 MB 每 rank：
+>
+> | op | 08-13 手编栈 `7a6059a3` | 本文正式包 `ec623f3` | 时间差 |
+> |---|---|---|---|
+> | dispatch | 81.25 GB/s / 1504 µs | 72–75 / 1665.1 µs | **+10.7%** |
+> | expanded dispatch | 81.44 / 1501 µs | 74–75 / 1644.4 µs | +9.6% |
+> | cached dispatch | 70.06 / 1743 µs | 73–74 / 1662.8 µs | **−4.6%** |
+> | combine | 65.75 / 3592 µs | 60–73 / 3560.8 µs | −0.9% |
+> | reduced combine | 56.00 / 4195 µs | 52–59 / 4243.9 µs | +1.2% |
+>
+> 不是整体变慢：combine 两侧基本重合，变的只有 dispatch 路径，而且**三个 dispatch 变体
+> 全部收敛到 ≈1664 µs**。08-13 时 `dispatch` 比 `cached dispatch` 快 240 µs（AWS 参考也一样，
+> 81.00 vs 69.94），正式包上这个差值消失了 —— 所以更准确的说法是 *dispatch 丢掉了它相对
+> cached dispatch 的优势*，而 p5en 上"cached 反而慢"本身就是至今没解释的反常（b200 上是反的）。
+> 两侧 GIN layout 也不同（08-13 `gin_context_cnt=5 / indexed_signals=49 / num_qp=5`，
+> 本文 `11 / 21 / 11`），而 `kNumParts = constexpr_num_parts(kNumGinSignals, kNumSMs, kNumQPs, …)`
+> **只喂 dispatch、不喂 combine**，和现象吻合，也正是 PR #1 动的杠杆。候选原因还包括
+> DeepEP commit 本身（`main` 被 force-push 重写过，3/4 个 base commit 的 patch-id 变了）
+> 和 `--skip-check`。**未复测，不下结论。**
+> 原始数据：`deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt`（🔒 本机）。
 
 ### 5.2 Decode（`--num-tokens=128`）— 延迟。**正式版偏慢，两个 PR 待合**
 

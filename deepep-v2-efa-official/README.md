@@ -267,9 +267,30 @@ reduced combine; dispatch shows no such split. **So never quote one node's range
 machine is slow flips between runs, so a single run cannot tell you whether this is an
 intrinsic leader-node effect — we draw no mechanism conclusion here.
 
-> Cross-check against the old hand-built path (source NCCL + source aws-ofi-nccl) at the
-> same operating point: cached dispatch 72.28 / combine 70.39 / reduced combine 59.60 GB/s
-> SO (9-rep mean) vs 73–74 / 60–73 / 52–59 here. **The packaged path costs no performance.**
+> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower and we do not yet
+> know why.** That run used source NCCL `2.30.7-1` + source aws-ofi-nccl `--enable-gdaki`
+> + DeepEP `7a6059a3`; its `test_ep.py` args are byte-identical to §"Run" apart from an
+> extra `--skip-check`, same `use_fp8_dispatch=1`, same 399.8 MB per rank, same two nodes.
+>
+> | op | 08-13 hand-built `7a6059a3` | here, packaged `ec623f3` | Δ time |
+> |---|---|---|---|
+> | dispatch | 81.25 GB/s / 1504 µs | 72–75 / 1665.1 µs | **+10.7%** |
+> | expanded dispatch | 81.44 / 1501 µs | 74–75 / 1644.4 µs | +9.6% |
+> | cached dispatch | 70.06 / 1743 µs | 73–74 / 1662.8 µs | **−4.6%** |
+> | combine | 65.75 / 3592 µs | 60–73 / 3560.8 µs | −0.9% |
+> | reduced combine | 56.00 / 4195 µs | 52–59 / 4243.9 µs | +1.2% |
+>
+> This is not a broad slowdown — combine barely moves and **all three dispatch variants
+> collapse onto ≈1664 µs**. On 08-13 `dispatch` beat `cached dispatch` by 240 µs (AWS's own
+> reference likewise, 81.00 vs 69.94); here that gap is gone. So the accurate statement is
+> that *dispatch lost its advantage over cached dispatch* — and p5en's "cached is slower"
+> is itself the still-unexplained inversion (b200 is the other way round). The GIN layouts
+> also differ (08-13 `gin_context_cnt=5 / indexed_signals=49 / num_qp=5` vs `11 / 21 / 11`
+> here), and `kNumParts = constexpr_num_parts(kNumGinSignals, kNumSMs, kNumQPs, …)` feeds
+> **dispatch only, not combine**, which fits — it is the same lever PR #1 moves. Other
+> candidates: the DeepEP commit itself (`main` was force-rewritten; 3 of 4 base commits
+> changed patch-id) and `--skip-check`. **Not re-measured; no conclusion drawn.**
+> Raw data: `deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt` (🔒 local-only).
 
 ### Decode (`--num-tokens=128`) — latency. The release is slow; two PRs are pending
 
