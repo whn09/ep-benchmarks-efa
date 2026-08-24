@@ -141,25 +141,44 @@ since its bench defaults differ). Lower = better.
 | DeepEP V1 + amazon NVSHMEM (PR#9 reverted) | 585 µs | 639 µs | (n/a) | (n/a) | 691 µs | 416 µs |
 | DeepEP V1 + amazon NVSHMEM (PR#9 in) | 765 µs | 641 µs | 602 µs | 561 µs | (not run) | (not run) |
 | DeepEP V2 (`deepep-v2-uccl-style/` decode, CPU-proxy, 2026-05) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs | ~~1925 µs~~ | ~~1700 µs~~ |
-| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | 341 µs (step) ‡ | ‡ | **200.4 µs** | **160.1 µs** |
-| **UCCL-EP** re-run on the GDAKI stack, same nodes (2026-08) ‡ | — | — | 519 µs (step) | — | 103–136 µs | 229–367 µs |
+| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** | **189.6 µs** | **200.4 µs** | **160.1 µs** |
+| **UCCL-EP** re-run on the GDAKI stack, same nodes (2026-08) ‡ | — | — | 220.2 µs | 301.0 µs | 103–136 µs | 229–367 µs |
 
 ‡ **The `DeepEP V2` decode row above is obsolete — do not quote it.** GDAKI route B
 is **~10× faster** than the struck-through b300 cells. Read these three rows
 together, with three caveats: (1) the GDAKI cells are **op-level** (DeepEP V2 splits
 each op into two kernels — `dispatch_impl` + `dispatch_copy_epilogue_impl` — and
-both are counted); (2) b300 GDAKI is at 55 SM, 256 experts, `:parts1`; the p5en cell
-is the **step total** (dispatch+combine, 12 SM, `kMaxParts=1` + `EP_NUM_SUB_PARTS=1`)
-because the tuned p5en run was only recorded as a step, and its b300 equivalent is
-**360.5 µs**; (3) **UCCL-EP's per-op LL timings are not reproducible** — two runs of
-the identical config gave dispatch 136.12 → 103.15 µs (−24%) and combine
+both are counted; kernel-only, the tuned p5en pair is 135.1 + 185.1 = 320.2 µs, so the
+epilogues are worth +16.5 on dispatch and +4.6 on combine and must not be dropped when
+comparing against the single fused kernels that UCCL-EP and the v1 IB references time);
+(2) **all four GDAKI cells are 256 experts, not this table's 288** — b300 at 55 SM with
+`:parts1`, p5en at 12 SM with `kMaxParts=1` + `EP_NUM_SUB_PARTS=1`. Steps: p5en
+**341.2 µs** (151.6+189.6), b300 **360.5 µs** (200.4+160.1). The p5en UCCL-EP cells are
+likewise our own 256-expert run on the same two nodes so the shape matches; at UCCL's own
+288-expert default we measure 211.4 + 298.8 = **510.2 µs** against their **published 519**
+(dispatch 6.5% under, combine 2.0% over, step 1.7% under), so their published row is not
+a luckier machine. Independent cross-check of the p5en pair on the *released-package*
+image (`ec623f3` + [PR#1](https://github.com/amazon-contributing/DeepEP/pull/1) +
+[#2](https://github.com/amazon-contributing/DeepEP/pull/2), committed data in
+[`deepep-v2-efa-official/`](deepep-v2-efa-official/)): dispatch 166.1 ± 0.4 / combine
+179.8 ± 1.2 = **345.9 µs**, within 1.4% on the step — but that campaign times ops with
+`test_ep.py`'s own clock rather than `bench_kineto`, so use it as corroboration and do not
+mix it into these cells; (3) **UCCL-EP's per-op LL timings are not reproducible on b300**
+— two runs of the identical config gave dispatch 136.12 → 103.15 µs (−24%) and combine
 228.55 → 367.21 µs (+61%) while its own back-to-back dispatch+combine loop was
 stable to 0.1% (439.34 → 438.94 µs). **Quote 439 µs for UCCL b300 decode**; the
-per-op cells above are ranges, not points. On that reproducible metric DeepEP
+b300 per-op cells above are ranges, not points. This does *not* apply to the p5en UCCL
+cells, which reproduce their published per-op values to 6.5%/2.0% as above. On that
+reproducible metric DeepEP
 V2+GDAKI is **1.22× faster** (360.5 vs 439 µs), but **UCCL's dispatch alone is
 1.5–1.9× faster than ours** while **our combine is 1.4–2.3× faster than its** — and
 UCCL spends 4 CPU proxy threads per rank (32/node) to get there, where GDAKI route B
-spends **zero**. The old `run_low_latency.sh` UCCL b300 row (277/149 µs) is at 288
+spends **zero**. **On p5en the same head-to-head is 1.53× in DeepEP's favour** (341.2 vs
+521.1 µs step, both at 256 experts on the same two nodes) and there we win *both* ops —
+151.6 vs 220.2 dispatch, 189.6 vs 301.0 combine. So the b300 dispatch deficit is specific
+to that arm, not architectural; note though that the b300 arm runs at 55 SM and p5en at
+12, so this is two observations rather than one controlled sweep.
+The old `run_low_latency.sh` UCCL b300 row (277/149 µs) is at 288
 experts with a different launcher and a pre-uccl#950 rev, so it is not like-for-like
 with these and is left as-is.
 
