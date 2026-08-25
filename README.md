@@ -71,9 +71,11 @@ component-version pins.
 | **p6-b300.48xlarge** | **B300 SXM6 (sm_103) × 8** | 16 | **400 Gbps** | **6.4 Tbps** | **v3** |
 | **p6-b200.48xlarge** | **B200 SXM6 (sm_100) × 8** | 8 | **400 Gbps** | **3.2 Tbps** | **v3** |
 
-All numbers below: 2 nodes × 8 GPU = **16 ranks**, us-east-2, 2026-05-16.
-Same Dockerfiles and launchers work on both instances; only `EP_NIC_NAME`
-differs (`rdmap79s0` on p5, `rdmap85s0` on p5en — both auto-detectable).
+The 2026-05 rows below are 2 nodes × 8 GPU = **16 ranks**, us-east-2, 2026-05-16;
+the 2026-08 GDAKI rows are later campaigns on other clusters and carry their own
+date, node count and config in the footnote under each table — read that before
+quoting a cell. Same Dockerfiles and launchers work on both instances; only
+`EP_NIC_NAME` differs (`rdmap79s0` on p5, `rdmap85s0` on p5en — both auto-detectable).
 
 ## Side-by-side results
 
@@ -105,8 +107,10 @@ number without building anything from source, but only if you set two env vars**
 **81.2 GB/s / 1502.9 µs** on the same args versus 74.0 / 1644.0 on the default env —
 all-rank means, 16 ranks, see
 [`deepep-v2-efa-official/results/p5en_2n4n_20260825/summary.txt`](deepep-v2-efa-official/results/p5en_2n4n_20260825/summary.txt).
-The QP layout is not a lever: `--num-allocated-qps 5` moves plain dispatch 0.4% on type 5
-and its sign flips with node count), and
+The QP layout is not a lever: `--num-allocated-qps 5` moves plain 2-node prefill dispatch
+−0.8% on type 2 and +0.4% on type 5, i.e. the sign flips with the *backend*, not with node
+count; where it does cost something is cached dispatch (+9.6% on type 5) and 4-node decode
+dispatch, +19.3%: 1003.2 → 1197.0 µs), and
 the GB/s is `test_ep.py`'s **SO** denominator. **SO counts intra-node destinations
 too, so halve it for a wire rate** — 125 GB/s SO = 62.5 GB/s of the 100 GB/s
 per-GPU wire. UCCL's `GB/s (RDMA)` in the row above uses the **same** denominator
@@ -131,8 +135,9 @@ both dispatch and combine at EP=16. EFA matches or exceeds that on the
 mature stack (V1) thanks to wider per-rank NIC fan-out.
 
 UCCL-EP's published p5en numbers (`uccl-project/uccl/ep`) are
-**50 GB/s prefill dispatch and 18 GB/s combine** — within ~10 % of our
-reproduction (60.64 / 17.11), confirming the bench is consistent.
+**50 GB/s prefill dispatch and 18 GB/s combine**; our reproduction is
+60.64 / 17.11, i.e. **+21.3 % on dispatch and −4.9 % on combine** — the
+same ballpark, but only combine is inside 10 %.
 
 ### Low-latency / "decode" — end-to-end dispatch + combine latency
 
@@ -166,10 +171,10 @@ likewise our own 256-expert run on the same two nodes so the shape matches; at U
 a luckier machine. The *released-package* image reaches this shape faster still — 12 SM,
 `ec623f3` + [PR#1](https://github.com/amazon-contributing/DeepEP/pull/1) +
 [#2](https://github.com/amazon-contributing/DeepEP/pull/2) + `EP_NUM_SUB_PARTS=1` on the
-type-5 backend measures **dispatch 106.4 / combine 162.2 µs** (all-rank, 16 ranks,
+type-5 backend measures **dispatch 106.4 / combine 162.1 µs** (all-rank, 16 ranks,
 committed data in [`deepep-v2-efa-official/`](deepep-v2-efa-official/)) — consistent with
 that campaign's own pin-vs-package result (the packaged stack beats the hand-built pin by
-1.74–1.79× on decode dispatch), but it times ops with `test_ep.py`'s own clock rather than
+1.74–1.78× on decode dispatch), but it times ops with `test_ep.py`'s own clock rather than
 `bench_kineto`, so treat it as magnitude corroboration and do not mix it into these cells;
 (3) **UCCL-EP's per-op LL timings are not reproducible on b300**
 — two runs of the identical config gave dispatch 136.12 → 103.15 µs (−24%) and combine
