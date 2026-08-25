@@ -67,9 +67,9 @@ component-version pins.
 | Instance | GPU | EFA NICs | Per-NIC BW | Aggregate | Generation |
 |---|---|---|---|---|---|
 | p5.48xlarge | H100 80GB × 8 | 32 | 100 Gbps | 3.2 Tbps | v1 |
-| p5en.48xlarge | H200 80GB × 8 | 16 | 200 Gbps | 3.2 Tbps | **v2** (newer SRD) |
+| p5en.48xlarge | H200 80GB × 8 | 16 | 200 Gbps | 3.2 Tbps | v2 (newer SRD) |
 | **p6-b300.48xlarge** | **B300 SXM6 (sm_103) × 8** | 16 | **400 Gbps** | **6.4 Tbps** | **v3** |
-| **p6-b200.48xlarge** | **B200 SXM6 (sm_100) × 8** | 8 | **400 Gbps** | **3.2 Tbps** | **v3** |
+| **p6-b200.48xlarge** | **B200 SXM6 (sm_100) × 8** | 8 | **400 Gbps** | 3.2 Tbps | **v3** |
 
 The 2026-05 rows below are 2 nodes × 8 GPU = **16 ranks**, us-east-2, 2026-05-16;
 the 2026-08 GDAKI rows are later campaigns on other clusters and carry their own
@@ -78,6 +78,13 @@ quoting a cell. Same Dockerfiles and launchers work on both instances; only
 `EP_NIC_NAME` differs (`rdmap79s0` on p5, `rdmap85s0` on p5en — both auto-detectable).
 
 ## Side-by-side results
+
+**What bold means in the three results tables below:** exactly the best cell in that column,
+compared **only within the same config group** — the 2026-05/BF16 rows and the
+2026-08 GDAKI rows are different shapes and different clocks (see each table's
+footnote), so each group is bolded on its own. ⭐ marks the fastest stack on that
+hardware. Two bold cells in a column means a genuine tie; no bold at all means no
+arm is a defensible winner there. Near-ties are called out in the prose, not by bold.
 
 ### Normal mode / "throughput" — RDMA bandwidth (per-rank effective)
 
@@ -89,7 +96,7 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 | Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine | **B300 Dispatch BF16** | **B300 Combine** |
 |---|---|---|---|---|---|---|
 | **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** | **53.92 GB/s** | **62.54 GB/s** | **58.48 GB/s** | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
-| UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | **90.03 GB/s** | **58.99 GB/s** |
+| UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | 90.03 GB/s | 58.99 GB/s |
 | DeepEP V2 + aws-ofi-nccl GIN (CPU-proxy, 2026-05) | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | ~~4 GB/s~~ | ~~21-26 GB/s~~ |
 | **DeepEP V2 + EFA GDAKI** (route B, 2026-08) † | — | — | **81.25 GB/s** | **65.75 GB/s** | **125 GB/s** | **131 GB/s** |
 
@@ -146,13 +153,13 @@ since its bench defaults differ). Lower = better.
 
 | Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine | **B300 Dispatch** | **B300 Combine** |
 |---|---|---|---|---|---|---|
-| pplx-garden (decode shape) | 402 µs | 517 µs (p50) | 222 µs (p50) | 245 µs (p50) | **140 µs** (p50) ⭐ | **149 µs** (p50) ⭐ |
-| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | **212 µs** (p50) | 324 µs (p50) | **171 µs** (p50) | **219 µs** (p50) |
-| UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | 207 µs | 301 µs | 277 µs | **149 µs** ⭐ |
+| pplx-garden (decode shape) | **402 µs** | **517 µs** (p50) | 222 µs (p50) | **245 µs** (p50) | **140 µs** (p50) ⭐ | **149 µs** (p50) ⭐ |
+| UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | 212 µs (p50) | 324 µs (p50) | 171 µs (p50) | 219 µs (p50) |
+| UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | **207 µs** | 301 µs | 277 µs | **149 µs** ⭐ |
 | DeepEP V1 + amazon NVSHMEM (PR#9 reverted) | 585 µs | 639 µs | (n/a) | (n/a) | 691 µs | 416 µs |
 | DeepEP V1 + amazon NVSHMEM (PR#9 in) | 765 µs | 641 µs | 602 µs | 561 µs | (not run) | (not run) |
 | DeepEP V2 (`deepep-v2-uccl-style/` decode, CPU-proxy, 2026-05) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs | ~~1925 µs~~ | ~~1700 µs~~ |
-| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** | **189.6 µs** | **200.4 µs** | **160.1 µs** |
+| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** | **189.6 µs** | 200.4 µs | **160.1 µs** |
 | **UCCL-EP** re-run on the GDAKI stack, same nodes (2026-08) ‡ | — | — | 220.2 µs | 301.0 µs | 103–136 µs | 229–367 µs |
 
 ‡ **The `DeepEP V2` decode row above is obsolete — do not quote it.** GDAKI route B
@@ -180,7 +187,9 @@ that campaign's own pin-vs-package result (the packaged stack beats the hand-bui
 — two runs of the identical config gave dispatch 136.12 → 103.15 µs (−24%) and combine
 228.55 → 367.21 µs (+61%) while its own back-to-back dispatch+combine loop was
 stable to 0.1% (439.34 → 438.94 µs). **Quote 439 µs for UCCL b300 decode**; the
-b300 per-op cells above are ranges, not points. This does *not* apply to the p5en UCCL
+b300 per-op cells above are ranges, not points, which is why the b300 dispatch
+column of this 2026-08 pair carries no bold — UCCL's 103–136 µs does beat our
+200.4, but not reproducibly. This does *not* apply to the p5en UCCL
 cells, which reproduce their published per-op values to 6.5%/2.0% as above. On that
 reproducible metric DeepEP
 V2+GDAKI is **1.22× faster** (360.5 vs 439 µs), but **UCCL's dispatch alone is
