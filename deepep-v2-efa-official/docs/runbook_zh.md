@@ -89,10 +89,25 @@ modinfo gdrdrv | grep ^version ; ls -l /dev/gdrdrv
 ibv_devinfo -l                                 # 16 个 rdmap*
 fi_info | grep -c "fabric: efa-direct"         # 16
 
-# COMP_CNTR capability 在 ABI 头里 —— 这才是 1.50.0 的真判据
-grep COMP_CNTR /usr/src/efa-*/efa-abi.h 2>/dev/null || \
-  strings /lib/modules/$(uname -r)/updates/efa.ko | grep -c comp_cntr   # 期望几十个，不是 0
+# COMP_CNTR capability 在 ABI 头里 —— 这才是 1.50.0 的真判据。
+# 头文件在 DKMS 源码树的 src/ 下面（不是 /usr/src/efa-*/ 的第一层）：
+grep COMP_CNTR /usr/src/efa-*/src/efa-abi.h        # 期望 3 行，含 = 1 << 8
+
+# 交叉验证：直接看装上去的模块。Ubuntu 的 DKMS 模块在 updates/dkms/ 下且是
+# zstd 压缩的，所以路径要用 modinfo -n 问出来，不能写死：
+zstd -dc "$(modinfo -n efa)" | strings | grep -c comp_cntr   # 期望 12，不是 0
 ```
+
+> ⚠️ **两个会把健康节点误判成坏节点的坑。**
+> 1. **别 grep `/usr/include/rdma/efa-abi.h`** —— 那是 host 上 distro rdma-core 带的
+>    用户态头，在装了 1.50.0 的机器上它照样 **0 个 COMP_CNTR**，因为 DKMS 只换内核模块
+>    不换 host 的用户态包。容器里自带 rdma-core 64.0，所以这不影响跑，但拿它当判据必错。
+> 2. **`strings` 的路径写死会静默返回 0。** `strings: No such file` 走 stderr，
+>    `grep -c` 拿到空输入就打印 `0`，看起来像"驱动不支持"，实际是文件没找到。
+>    上面两条命令的正确输出是 **3 行** 和 **12**；任何一条打出 `0` 先确认路径存在。
+>
+> 最终判据仍然是**在一次性容器里**跑附录 A 的 `ibv_create_comp_cntr` 探针（`CE OK` × 16）——
+> 它同时覆盖 host 内核模块和容器里那份 rdma-core，正好是依赖链最底下两层。
 
 **`fi_info -p efa-direct` 永远失败，别拿它当判据。** 它固定返回 `-61 (No data available)`，哪怕节点完全健康 —— `-p` 过滤的是 **provider** 名（就是 `efa`），只有 **fabric** 名叫 `efa-direct`。用 `fi_info | grep fabric`。
 同样，"有 efa-direct" 也**不**代表版本够（1.49.0 就有 16 个），见附录 A。
@@ -142,17 +157,58 @@ docker run --rm -it \
 
 前两处是复现性问题，第三处是它们暴露出来的。三处都**重建镜像验证过**，不是推理。
 
-**1) 钉死 DeepEP commit。** 不钉的话就是 `git clone --depth 1` 拉 `main`、不带任何 pin（`git rev-parse --is-shallow-repository` = true）。今天建出来是 `2.1.0+ec623f3`，明天重建就是别的 commit，而 §5 的数字全是在 `ec623f3` 上测的 —— 会静默失配。
-`git clone --depth 1 --branch <sha>` **不接受裸 sha**，只能 init + fetch：
+**1) DeepEP 版本用 `DEEPEP_REF`，默认钉一个 sha，但"跟最新"是一等公民。**
+`DEEPEP_REF` 接受 branch / tag / 裸 sha 三种写法；`git clone --depth 1 --branch <sha>`
+**不接受裸 sha**，所以只能 init + fetch：
 
 ```dockerfile
-ARG DEEPEP_COMMIT=ec623f31b605b27d67c9b224d69378137f77bbe3
+ARG DEEPEP_REF=8e7b42e9b22de4bf70d1de6858db3725c341b628      # 或 main
+ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${DEEPEP_REF} /tmp/deepep-ref.json
 RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
     && git remote add origin https://github.com/amazon-contributing/DeepEP.git \
-    && git fetch -q --depth 1 origin "$DEEPEP_COMMIT" \
+    && git fetch -q --depth 1 origin "$DEEPEP_REF" \
     && git checkout -q FETCH_HEAD \
+    && git rev-parse HEAD > /opt/DeepEP/BUILD_REF \
     && git submodule update -q --init --recursive --depth 1 && ...
 ```
+
+**为什么默认是 sha 而不是 `main`** —— 不是怕新代码，是三条具体的坑：
+
+1. **§5 每个数字都对应一个确定的 tree。** 漂的话，重建出来数字对不上时，你分不清是
+   自己环境不对还是代码变了。
+2. **upstream 会改写历史。** 我们原来钉的 `ec623f3` 现在**已经不在 `main` 上**了 ——
+   它被重写成 `cc55cce`（而且内容也动了：`buffer.hpp` / `nccl.cu` / `combine.hpp` /
+   `elastic.py` 共 +41/−19），`main` 又往前走了 4 个 commit 到 `8e7b42e`。
+   钉着的时候这件事是**可见的**（fetch 得到一个不在任何分支上的 sha）；漂着的时候
+   它对你完全隐形。
+3. **`ordered` kernel 在 EFA GDAKI 上不正确**（§7）。默认 kernel 选择哪天变了，
+   漂的镜像会静默跑到错的 kernel 上。
+
+**那个 `ADD` 不是装饰。** 没有它，`RUN git fetch origin main` 是一条固定的命令字符串，
+Docker 会**命中旧 layer** —— 你以为拉到了最新，实际拿的是上次的代码。**这比明着钉死
+更危险**：钉死是诚实地旧，缓存命中是假装地新。`ADD` 一个 URL 每次都会重取，内容变了
+layer 才失效；钉 sha 时该 URL 内容恒定，缓存照样有效。（走 GitHub API，未认证限速
+60 次/小时，仅用于算 cache key。）
+
+**每次跑都把实际 sha 打进日志。** 镜像 tag 是人起的名字，`BUILD_REF` 是构建时
+`git rev-parse HEAD` 的结果。`run_test_ep.sh` 会在开跑前打印：
+
+```
+=== IMAGE=deepep-v2-efa-official:dev  DeepEP=8e7b42e9b22de4bf70d1de6858db3725c341b628 ===
+```
+
+同 tag 重建过的镜像因此不会产生无法归属的数字。
+
+**怎么知道 Xuan 推了新代码**（一条命令，不用建镜像）：
+
+```bash
+PINNED=$(grep -oE '^ARG DEEPEP_REF=\S+' Dockerfile | cut -d= -f2)
+TIP=$(git ls-remote https://github.com/amazon-contributing/DeepEP.git refs/heads/main | cut -f1)
+[ "$PINNED" = "$TIP" ] && echo "up to date" || echo "main 已前进：$PINNED -> $TIP，去重测后再 bump"
+```
+
+流程是**先量后 bump**，不是自动跟随：`main` 前进 → 跑 §5 的对照组 → 确认在噪声内 →
+改默认值。`8e7b42e` 就是这么定的（对照见 §5.4 的 8 组配对，全部落在 0.1–1.1%）。
 
 **2) 删掉 apt 的 `libnccl2` / `libnccl-dev` 2.28.3。** installer 的 NGC 分支会顺带装上它们并置成 `hold`。2.28.3 < 2.30.4 ⇒ **没有 GIN**，而 `ldconfig` 恰好把 `libnccl.so.2` 解析到它、`/usr/include/nccl.h` 也是它。留着的话任何人动一下 `LD_LIBRARY_PATH` / `LD_PRELOAD` 就会静默掉到没 GIN 的那份上。删是安全的：`libnccl-ofi-ngc-v3` 这个 deb **没有任何 `Depends` 字段**，`libnccl-net-ofi.so` **只链 `libfabric.so.1`、根本不链 libnccl**（它是被 NCCL 加载的插件），`apt-get -s remove` 也只动这两个包。
 
@@ -460,6 +516,12 @@ SM 算出来的 context 数**从上面截断**（`nccl.cu:172-179` 打个 warnin
 decode 上有两个互相独立的杠杆：GIN 后端（只改 env，§6）和 dispatch 的 part 几何（两个待合的
 PR）。两者**可以叠加**。镜像用 PR #2 的 head `b097b03`，PR #1 是它的祖先，所以这一个 SHA
 就是"两个 PR 叠加"这个 arm。
+
+这个 head 与 `main` 的 merge-base 是 `cc55cce`，所以打了补丁的镜像和未打补丁的 `ec623f3`
+镜像**不共享 base**。两点让对比仍然站得住：clamp-off 对照组（`EP_MIN_TOKENS_PER_PART=1`）
+是**在同一个打了补丁的镜像里**跑的，base 恒定，所以 clamp 的效果是干净的
+（2 节点 171.5 → 112.7 µs，−34.3%）；而 `main` `8e7b42e` 包含补丁 base 的全部内容还多 4 个
+commit，它和 `ec623f3` 的 8 组配对全部落在 0.1–1.1%（§5.4）。
 
 | PR（基于 `main`） | 内容 |
 |---|---|

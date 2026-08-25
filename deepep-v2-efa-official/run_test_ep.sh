@@ -29,10 +29,12 @@
 #                    prints the GIN layout line -- but it ALSO printf()s a
 #                    per-call "CPU side received count" from inside dispatch's
 #                    host polling loop (`csrc/elastic/buffer.hpp:1151`), i.e.
-#                    inside the timed region. Measured 2026-08-25 on 2x p5en:
-#                    +0.7% on 8192-tok dispatch but +6-9% on 128-tok dispatch
-#                    (352.0 -> 371-385 us). Use it to confirm the layout, then
-#                    turn it OFF for any number you intend to publish.
+#                    inside the timed region. Its cost is not separable from
+#                    run-to-run spread (2x p5en, 12 SM, 128 tok, all-rank means:
+#                    off 359.2 / 371.1 us, on 327.2 / 373.5 us), so no number is
+#                    claimed -- but it is asymmetric across launchers, so an arm
+#                    that sets it is not comparable to one that does not. Use it
+#                    to confirm the layout, then turn it OFF for anything you publish.
 #   IMAGE, WORLD_SIZE, NUM_PROCESSES, EP_NIC_NAME, NCCL_DEBUG, EXTRA_ENV
 set -euo pipefail
 
@@ -86,6 +88,12 @@ fi
 # default: with the packaged 1.50.0 stack GDAKI loads without any of them.
 EXTRA_ENV_ARGS=""
 for kv in ${EXTRA_ENV:-}; do EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS -e $kv"; done
+
+# Stamp what code is actually in the image into every log. The image tag is a
+# name someone chose; BUILD_REF is what `git rev-parse HEAD` said at build time.
+# Without this, a rebuilt-but-same-tag image produces numbers you cannot attribute.
+echo "=== IMAGE=${IMAGE}  DeepEP=$(docker run --rm --entrypoint cat "${IMAGE}" \
+  /opt/DeepEP/BUILD_REF 2>/dev/null || echo 'BUILD_REF absent -- image predates SHA stamping') ==="
 
 set -x
 docker run --rm \

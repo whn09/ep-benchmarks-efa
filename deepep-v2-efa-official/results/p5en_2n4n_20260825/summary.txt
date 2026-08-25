@@ -30,20 +30,37 @@ NCCL          2.31.2+cuda13.3 (in-image), ofi plugin /opt/amazon/ofi-nccl
 Fabric        "Selected provider is efa, fabric is efa-direct" (both backends)
 
 Images
-  official  deepep-v2-efa-official:dev              DEEPEP_COMMIT=ec623f3
-  main      deepep-v2-efa-official:main-8e7b42e     DEEPEP_COMMIT=8e7b42e
+  official  deepep-v2-efa-official:dev              DEEPEP_REF=ec623f3
+  main      deepep-v2-efa-official:main-8e7b42e     DEEPEP_REF=8e7b42e
             (amazon-contributing/DeepEP main tip, 2026-08-24)
-  prs       deepep-v2-efa-official:pr1pr2-b097b03   DEEPEP_COMMIT=b097b03
+  prs       deepep-v2-efa-official:pr1pr2-b097b03   DEEPEP_REF=b097b03
             = PR #2 head; PR #1 (5118c2e) is an ancestor, so this ONE sha is the
             "#1 + #2 stacked" arm. Both PR heads live in whn09/DeepEP but are
             fetchable from amazon-contributing/DeepEP, so the Dockerfile needs no
-            change beyond --build-arg. Base of both PRs = 8e7b42e.
+            change beyond --build-arg. Merge-base of both PR heads with main is
+            cc55cce, NOT 8e7b42e: the PR branches were cut before main's last 4
+            commits, and they carry their own copies of two of them (the sysfs
+            rate probe and the test_ep pressure loops), which is why both PRs
+            read CONFLICTING on GitHub. The conflict is confined to
+            deep_ep/utils/envs.py; each PR's substantive commit
+            (csrc/jit/compiler.hpp, hybrid_dispatch_unordered.cuh) cherry-picks
+            onto 8e7b42e cleanly.
   pin       deepep-v2-efa-gdaki-h200:dev-7a6059a3   the hand-assembled stack
             behind results/p5en_ours_20260813 (source NCCL 2.30.7-1 + source
             aws-ofi-nccl --enable-gdaki + DeepEP 7a6059a3), launched with
             GDAKI=1, which already sets the full route-B env.
   Every image built independently on all 4 nodes, BUILD_RC=0, `import deep_ep`
   -> 2.1.0.
+
+  None of ec623f3 / 5118c2e / b097b03 is reachable from any branch any more
+  (upstream rewrote ec623f3 as cc55cce; the two PR branches were rebased onto
+  8e7b42e to resolve their envs.py conflict). To keep every tree behind these
+  tables fetchable they are archived as tags in whn09/DeepEP:
+    bench-20260825-official-ec623f3    ec623f31b605b27d67c9b224d69378137f77bbe3
+    bench-20260825-pr1-5118c2e         5118c2e3f97920841567eafd868b850a091ff3a0
+    bench-20260825-pr1pr2-b097b03      b097b03799533c911a1a594fdeb82375fa8c3bd7
+  Rebuild any arm with
+    --build-arg DEEPEP_REF=<tag>  (add whn09/DeepEP as the remote for tags)
 
 Test command (all arms; the pin launcher forwards only --num-processes/--num-sms
 so the shape args must be spelled out or test_ep.py silently runs 4096 tok/topk 6)
@@ -249,9 +266,14 @@ arm                                    dispatch  cached disp  combine  redComb
 2N/12SM/128   official ec623f3          169.4     165.9        162.7    179.0
 2N/12SM/128   main 8e7b42e              169.9     165.6        162.5    178.9
 
-main tip 8e7b42e = ec623f3 + 78ae4e5 (sysfs rate probe) + f297499 + e3fd436
-+ 8e7b42e; gin_resource_alloc.cuh is unchanged. Every pair above is within
-0.1-1.1%, i.e. inside run noise. Take main.
+main tip 8e7b42e = cc55cce + 78ae4e5 (sysfs rate probe) + f297499 (test_ep
+pressure loops) + e3fd436 (64-bit st.bulk operand) + 8e7b42e (single-node GIN
+context count); gin_resource_alloc.cuh is unchanged throughout. Note ec623f3 is
+NOT an ancestor of main: upstream rewrote it as cc55cce, which also changes
+content (buffer.hpp / nccl.cu / combine.hpp / elastic.py, +41/-19). So the
+official-vs-main rows below are an A/B across that rewrite too, not just across
+the 4 commits -- and they still land within 0.1-1.1%, i.e. inside run noise.
+Take main.
 
 vs the hand-assembled 08-13 pin (7a6059a3, source NCCL + source aws-ofi-nccl,
 --skip-check, GDAKI=1):

@@ -74,15 +74,31 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # ---------------------------------------------------------------------------
 ENV TORCH_CUDA_ARCH_LIST=9.0
 ENV EP_JIT_CACHE_DIR=/root/.deep_ep
-# 钉死 commit：runbook 里的性能数字是在这个 tree 上测的，跟着 main 漂会静默失配。
-# 想跟最新就改成 main（注意此时数字不再可比）。
+# DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法。
+#
+# 默认钉在一个 sha 上，而不是跟 main 漂 —— 理由不是"怕新代码"，是三条：
+#   1) runbook §5 的每个数字都对应一个确定的 tree。跟着 main 漂，重建出来的数字
+#      和文档不符时，你分不清是自己环境搞错了还是代码变了。
+#   2) upstream 会**改写历史**。我们原来钉的 ec623f3 现在已经不在 main 上了：
+#      它被重写成 cc55cce（内容也变了，4 个文件 +41/−19），main 又往前走了 4 个
+#      commit。漂的话这种事发生时你毫无感知。
+#   3) `ordered` kernel 在 EFA GDAKI 上是**不正确**的（见 runbook §7）。默认 kernel
+#      选择将来一旦变化，漂的镜像会静默跑到错的 kernel 上。
+# 想跟最新就 `--build-arg DEEPEP_REF=main`，下面的 ADD 会自动让 layer cache 失效。
+# 没有这个 ADD 的话，`RUN git fetch origin main` 会命中旧 layer —— 你以为拉到了
+# 最新，实际拿的是上次的代码。这比明着钉死更危险。
+#   注意：ADD 走 GitHub API，未认证限速 60 次/小时；只是用来算 cache key。
+#
 # `git clone --depth 1 --branch <sha>` 不接受裸 sha，只能 init + fetch。
 # third-party/fmt 是 submodule，不拉的话 setup.py 和 JIT 都缺 fmt 头文件。
-ARG DEEPEP_COMMIT=ec623f31b605b27d67c9b224d69378137f77bbe3
+ARG DEEPEP_REF=8e7b42e9b22de4bf70d1de6858db3725c341b628
+ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${DEEPEP_REF} /tmp/deepep-ref.json
 RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
     && git remote add origin https://github.com/amazon-contributing/DeepEP.git \
-    && git fetch -q --depth 1 origin "$DEEPEP_COMMIT" \
+    && git fetch -q --depth 1 origin "$DEEPEP_REF" \
     && git checkout -q FETCH_HEAD \
+    && git rev-parse HEAD > /opt/DeepEP/BUILD_REF \
+    && echo "DeepEP build ref '$DEEPEP_REF' resolved to $(cat /opt/DeepEP/BUILD_REF)" \
     && git submodule update -q --init --recursive --depth 1 \
     && NCCL_LIB="$(python3 -c 'import nvidia.nccl,os;print(os.path.join(list(nvidia.nccl.__path__)[0],"lib"))')" \
     && test -e "$NCCL_LIB/libnccl.so.2" \

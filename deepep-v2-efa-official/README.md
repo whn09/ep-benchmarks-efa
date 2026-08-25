@@ -185,10 +185,20 @@ context; it is not committed here because of its size.
 
 All three were verified by an actual rebuild, not by reasoning.
 
-- **The DeepEP commit is pinned** (`ARG DEEPEP_COMMIT=ec623f3…`). An unpinned
-  `git clone --depth 1` of `main` means a rebuild tomorrow silently stops matching the
-  numbers below. `git clone --depth 1 --branch <sha>` does not accept a bare sha, hence
-  the `git init` + `git fetch --depth 1 origin <sha>` form.
+- **`ARG DEEPEP_REF` takes a branch, tag or bare sha, and defaults to a sha**
+  (`8e7b42e…`, current `main`, measured perf-neutral against the tables below). Track the
+  tip with `--build-arg DEEPEP_REF=main`. Two things make that safe: an
+  `ADD https://api.github.com/…/commits/${DEEPEP_REF}` ahead of the clone, without which
+  `RUN git fetch origin main` **hits a cached layer** and hands you last week's code while
+  looking fresh — worse than an honest pin; and `git rev-parse HEAD` stamped to
+  `/opt/DeepEP/BUILD_REF`, which `run_test_ep.sh` prints in every log so no number is
+  unattributable. `git clone --depth 1 --branch <sha>` does not accept a bare sha, hence
+  the `git init` + `git fetch --depth 1` form. Upstream **rewrites history** — the earlier
+  `ec623f3` is no longer reachable from `main` (rewritten as `cc55cce`, with content
+  changes, and `main` moved 4 commits past it), which a pin makes visible and a floating
+  ref hides. Check for drift without building:
+  `git ls-remote https://github.com/amazon-contributing/DeepEP.git refs/heads/main`,
+  then re-measure before bumping.
 - **apt's `libnccl2`/`libnccl-dev` 2.28.3 are removed.** The installer's NGC branch pulls
   them in and marks them `hold`. 2.28.3 < 2.30.4 ⇒ **no GIN**, and `ldconfig` resolves
   `libnccl.so.2` to *them* (`/usr/include/nccl.h` too). Safe to remove: the
@@ -510,6 +520,13 @@ and the dispatch part geometry (two pending PRs).
 
 Both are measured on one image built from PR #2's head `b097b03`, which has PR #1 as an
 ancestor — so that single SHA *is* the "#1 + #2 stacked" arm.
+
+That head's merge-base with `main` is `cc55cce`, so the patched image does **not** share a
+base with the unpatched `ec623f3` one. Two things keep the comparison honest: the
+clamp-off control (`EP_MIN_TOKENS_PER_PART=1`) runs **inside the patched image**, so the
+clamp's effect is measured with the base held constant (171.5 → 112.7 µs at 2 nodes,
+−34.3%); and `main` `8e7b42e`, which contains everything the patched base has and more,
+measures within 0.1–1.1% of `ec623f3` on 8 paired rows (§ Results).
 
 | PR (base `main`) | What |
 |---|---|
