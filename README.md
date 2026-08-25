@@ -82,9 +82,14 @@ quoting a cell. Same Dockerfiles and launchers work on both instances; only
 **What bold means in the three results tables below:** exactly the best cell in that column,
 compared **only within the same config group** — the 2026-05/BF16 rows and the
 2026-08 GDAKI rows are different shapes and different clocks (see each table's
-footnote), so each group is bolded on its own. ⭐ marks the fastest stack on that
-hardware. Two bold cells in a column means a genuine tie; no bold at all means no
-arm is a defensible winner there. Near-ties are called out in the prose, not by bold.
+footnote), so each group is bolded on its own. Two bold cells in a column means a
+genuine tie; no bold at all means no arm is a defensible winner there. Near-ties are
+called out in the prose, not by bold.
+**⭐ marks the fastest stack on that hardware among the rows the table's own config
+statement admits.** That admits the GDAKI row in the decode table (which already
+tolerates 256 experts) but **not** in the throughput table: no DeepEP V2 arm was
+ever run at 4096 tokens in any campaign, so its 8192-token FP8 cells cannot be
+starred against a 4096/BF16 column.
 
 ### Normal mode / "throughput" — RDMA bandwidth (per-rank effective)
 
@@ -95,7 +100,7 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 
 | Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine | **B300 Dispatch BF16** | **B300 Combine** |
 |---|---|---|---|---|---|---|
-| **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** | **53.92 GB/s** | **62.54 GB/s** | **58.48 GB/s** | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
+| **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** ⭐ | **53.92 GB/s** ⭐ | **62.54 GB/s** ⭐ | **58.48 GB/s** ⭐ | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
 | UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | 90.03 GB/s | 58.99 GB/s |
 | DeepEP V2 + aws-ofi-nccl GIN (CPU-proxy, 2026-05) | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | ~~4 GB/s~~ | ~~21-26 GB/s~~ |
 | **DeepEP V2 + EFA GDAKI** (route B, 2026-08) † | — | — | **81.25 GB/s** | **65.75 GB/s** | **125 GB/s** | **131 GB/s** |
@@ -103,8 +108,13 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 † **The `DeepEP V2 + GIN` row above is obsolete — do not quote it.** It is the
 CPU-proxy path from 2026-05. The GDAKI row replaces it and is **~30× the b300
 dispatch number** in the struck-through cell. Config differences you must carry:
-**no cell in the GDAKI row is 4096/BF16** — the b300 cells are **8192 tokens, FP8
-dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8 dispatch, 12 SM**
+**no cell in the GDAKI row is 4096/BF16**, and no DeepEP V2 arm was run at 4096
+tokens in *any* campaign (the token counts on record are 128 / 512 / 1024 / 8192),
+while DeepEP V1 has no 8192-token run — so **V2-vs-V1 throughput is unmeasured in
+either direction on both p5en and b300**, which is why the GDAKI row is bolded
+inside its own group and carries no ⭐ even though 125 > 109.84. The b300 cells are
+**8192 tokens, FP8 dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8
+dispatch, 12 SM**
 (81.25 GB/s = 1504 µs dispatch, 65.75 = 3592 µs combine, 399.8 MB per rank,
 `results/p5en_ours_20260813/summary.txt`. **The released EFA 1.50.0 package reaches the same
 number without building anything from source, but only if you set two env vars**:
@@ -153,13 +163,13 @@ since its bench defaults differ). Lower = better.
 
 | Stack | p5 Dispatch | p5 Combine | p5en Dispatch | p5en Combine | **B300 Dispatch** | **B300 Combine** |
 |---|---|---|---|---|---|---|
-| pplx-garden (decode shape) | **402 µs** | **517 µs** (p50) | 222 µs (p50) | **245 µs** (p50) | **140 µs** (p50) ⭐ | **149 µs** (p50) ⭐ |
+| pplx-garden (decode shape) | **402 µs** ⭐ | **517 µs** (p50) ⭐ | 222 µs (p50) | **245 µs** (p50) | **140 µs** (p50) ⭐ | **149 µs** (p50) ⭐ |
 | UCCL-EP (`run_ll_pplx_style.sh`, pplx-style measurement) | 1281 µs (p50) | 1428 µs (p50) | 212 µs (p50) | 324 µs (p50) | 171 µs (p50) | 219 µs (p50) |
 | UCCL-EP (`run_low_latency.sh`, UCCL self-report) | ~3200 µs | ~830 µs | **207 µs** | 301 µs | 277 µs | **149 µs** ⭐ |
 | DeepEP V1 + amazon NVSHMEM (PR#9 reverted) | 585 µs | 639 µs | (n/a) | (n/a) | 691 µs | 416 µs |
 | DeepEP V1 + amazon NVSHMEM (PR#9 in) | 765 µs | 641 µs | 602 µs | 561 µs | (not run) | (not run) |
 | DeepEP V2 (`deepep-v2-uccl-style/` decode, CPU-proxy, 2026-05) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs | ~~1925 µs~~ | ~~1700 µs~~ |
-| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** | **189.6 µs** | 200.4 µs | **160.1 µs** |
+| **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** ⭐ | **189.6 µs** ⭐ | 200.4 µs | **160.1 µs** |
 | **UCCL-EP** re-run on the GDAKI stack, same nodes (2026-08) ‡ | — | — | 220.2 µs | 301.0 µs | 103–136 µs | 229–367 µs |
 
 ‡ **The `DeepEP V2` decode row above is obsolete — do not quote it.** GDAKI route B
