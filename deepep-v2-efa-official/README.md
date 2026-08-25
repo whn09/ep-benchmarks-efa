@@ -257,10 +257,15 @@ moment you go multi-node.
 > in `ec623f3`** (`git log ec623f3..7a6059a3` shows it), so this pin still needs an explicit
 > `--num-sms`; on `main` the auto path works.
 
-**And `--num-sms` is not a free parameter.** It also changes the allocated QP count, and
-*non-monotonically*: measured 0→17 QPs, 12→5, 24→10. A value landing on
-`num_qps < num_ranks` **hangs outright** — the GIN auto-tuner prints its lines and then
-nothing for 600 s. 16 ranks / 12 SM is fine (`num_qp=11`). To reproduce AWS's published
+**On this pin `--num-sms` is a pure perf axis — it does not change the QP count.**
+`ec623f3` deleted `kMinGinContextSharingFactor`, so the auto path is the constant
+`kDefaultGinContextCnt = 11` regardless of SM count (source arithmetic under § Why the GIN
+backend is the lever). Every log in `results/p5en_2n4n_20260825/logs/` prints
+`#QPs: 11/11` — at 6, 12, 24 and 32 SM, and at both 2 and 4 nodes. The SM-derived count
+(`ceil_div(num_sms × 4, 10)`, so 12 SM → 5 and 24 SM → 10, clamped at 17) is the
+**`7a6059a3` pin's** formula; the pin's logs print `#QPs: 5/5` at 12 SM. Nor is
+`num_qps < num_ranks` fatal here: `--num-allocated-qps 5` at 4 nodes gives 32 ranks
+`#QPs: 5/5` and still completes. To reproduce AWS's published
 rows, use their operating points: **H200 2-node 12 SM / H200 4-node 6 SM / B200 2-node
 12 SM**.
 
@@ -325,9 +330,11 @@ image; see the Chinese runbook's Appendix B.
 Ubuntu 24.04, driver 595.91.07, installer 1.50.0 + reboot. Container torch 2.13.0+cu130 /
 nccl 2.31.2 / `deep_ep 2.1.0+ec623f3`. `test_ep.py` exits 0 at 16 and 32 ranks with all
 correctness checks passing; `fi_pingpong -p efa` passes (64 B 1.73 MB/s, 4 K 282.48 MB/s).
-Every number below is on **GIN type 5**, at **24 SM**, with `EP_BUFFER_DEBUG` **off**, and
-is a mean over **all** ranks. Raw logs and the full matrix (backend A/B, SM scan, env
-teardown, PR arms):
+The prefill, decode and layering tables below are on **GIN type 5**, at **24 SM**, with
+`EP_BUFFER_DEBUG` **off**, and every figure is a mean over **all** ranks. The comparison
+sections after them (source stack, QP layout, PR arms) are at **12 SM**, to match the
+hand-built pin and the PR branch; each table states its own SM count. Raw logs and the
+full matrix (backend A/B, SM scan, env teardown, PR arms):
 [`results/p5en_2n4n_20260825/`](results/p5en_2n4n_20260825/summary.txt).
 
 **Denominators, stated once.** `SU` = the printed per-rank `bytes` ÷ time exactly.
@@ -663,3 +670,6 @@ dispatch + reduced combine (422.4 vs 422.2 µs).
 | `run_test_ep.sh` | Launcher. `TOKENS=8192` prefill / `TOKENS=128` decode; preflights a busy GPU and missing devices; auto-detects `EP_NIC_NAME`. |
 | `ce_probe.c` | `ibv_create_comp_cntr` probe over every device — the decisive GDAKI check. `gcc -o ce_probe ce_probe.c -libverbs` |
 | `docs/runbook_zh.md` | Full Chinese runbook: install → build → test, env-var reference, ~30-row troubleshooting table. |
+| `results/p5en_2n4n_20260825/make_tables.py` | **Emits every table published here** from `logs/`. `python3 make_tables.py` and paste — do not hand-edit a table. Includes a completeness audit (0 of 69 run tags short a rank). |
+| `results/p5en_2n4n_20260825/parse_ep.py` | Per-tag inspector: `EPRUNS=./logs python3 parse_ep.py <tag>`. Parses with `finditer` — concurrent ranks glue two records onto one physical line. |
+| `results/p5en_2n4n_20260825/summary.txt` | The full matrix, generated. `logs/` holds every node's raw log. |

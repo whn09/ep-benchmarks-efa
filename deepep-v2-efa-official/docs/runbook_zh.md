@@ -291,7 +291,13 @@ ZeroDivisionError: float division by zero
 > ec623f3..7a6059a3` 可见），所以我们这个 pin 仍然必须显式给 `--num-sms`；换到 `main` 之后
 > 自动探测就能用了。
 
-**而且 `--num-sms` 不是自由参数。** 它会连带改实际分配的 QP 数，且**非单调**（实测 0→17 QP、12→5、24→10），落到 `num_qps < num_ranks` 的档位会**直接挂死**（GIN auto-tuner 打完那几行就再无输出，600 s 超时）。16 rank / 12 SM（`num_qp=11`）和 24 SM 这两档都是好的。
+**在这个 pin 上 `--num-sms` 不改 QP 数，是一根纯性能轴。** `ec623f3` 删掉了
+`kMinGinContextSharingFactor`，auto path 变成常量 `kDefaultGinContextCnt = 11`，**与 SM 数无关**
+（§5.4 有源码推导）。`results/p5en_2n4n_20260825/logs/` 里每一份日志都打 `#QPs: 11/11` —— 6 / 12 /
+24 / 32 SM、2 节点和 4 节点，全都是 11。随 SM 变的那套（`ceil_div(num_sms × 4, 10)`，12 SM → 5、
+24 SM → 10、上限 clamp 到 17）是 **`7a6059a3` pin** 的公式，pin 的日志在 12 SM 打 `#QPs: 5/5`。
+`num_qps < num_ranks` 在这个 pin 上也不致命：4 节点 32 rank 传 `--num-allocated-qps 5` 拿到
+`#QPs: 5/5`，照样跑完出数（§5.4）。所以 SM 可以放心扫。
 
 **推荐工作点：2 节点和 4 节点都用 24 SM。** 下表 8192 tok、GIN type 5、`--test-first-only`、
 未开 `EP_BUFFER_DEBUG`，全 rank 均值（完整数据见
@@ -358,8 +364,9 @@ installer 1.50.0（production tarball，md5 `e5a5178944b1f1112f3b2eb3b15ca5a7`�
 16 卡和 32 卡 `test_ep.py` 都 **exit 0，正确性检查全过**；日志两侧都报
 `Selected provider is efa, fabric is efa-direct`。
 
-**下面所有数字都在 GIN type 5 上**（`NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0`，见 §6），
-`--test-first-only`，未开 `EP_BUFFER_DEBUG`，SM = 24（§4.2 的工作点）。
+**§5.1–5.3 都在 GIN type 5 上**（`NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0`，见 §6），
+`--test-first-only`，未开 `EP_BUFFER_DEBUG`，SM = **24**（§4.2 的工作点）。§5.4 / §5.5 的对照实验
+在 **12 SM** 上做，因为要和手编栈以及 PR 分支对齐；每张表自己标了 SM 数。
 
 **口径**（每次报速率都要一起报，只报 GB/s 曾经把结论弄反过）：
 
@@ -707,7 +714,7 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 **这一对是最小且充分的组合。** 逐个单变量测过（2 节点 12 SM 128 tok，全 rank dispatch）：
 默认 359.2 / 371.1 µs、`FI_EFA_USE_HW_CNTR=1` 375.8 µs、`NCCL_RMA_DISABLE=1` 359.5 µs、
 `NCCL_SYM_GIN_KERNELS_ENABLE=0` 单独 359.4 µs、`OFI_NCCL_GIN_STRONG_SIGNAL=1`
-**750.4 µs**（32 rank 散在 371–1130 µs，主动变坏）、这一对 169.4 µs、完整 5 个 route-B 变量
+**750.4 µs**（16 个 rank 散在 371.0–1130.0 µs，主动变坏）、这一对 169.4 µs、完整 5 个 route-B 变量
 170.0 µs（不比这一对好）。
 
 **怎么确认真的跑在 type 5 上**（`NCCL_DEBUG=INFO`）：
@@ -833,7 +840,7 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null  # 两份，认清�
 |---|---|---|
 | `ZeroDivisionError` in `get_theoretical_num_sms` | `--num-sms 0` 走 `ibstat` 自动探测，EFA 上必失败 | 显式给 `--num-sms 12`（§4.2） |
 | `Failed to get RDMA connection speed:` | 同上，`ibstat` 看不到 EFA 设备 | 单机无害；多机必须给 `--num-sms` |
-| 改了 `--num-sms` 后整轮**无输出挂死** | `num_sms` 连带改 `num_allocated_qps` 且**非单调**（0→17、12→5、24→10），落到 `num_qps < num_ranks` 就挂 | 看日志里 `num_qp=` 是否 ≥ rank 数；固定在官方三个工作点（§4.2） |
+| 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题：`ec623f3` 上 `#QPs` 恒为 11、与 SM 无关，本仓库 6/12/16/24/32 SM 全部跑通（§4.2）。先查上一轮有没有漏进程 —— rc=0 也不代表干净 | `nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§7） |
 | `ibv_devinfo`: No IB devices found，但 `lsmod` 有 efa | 启动时 ENI 没开 EFA | 重建实例，`InterfaceType=efa` |
 | `fi_info -p efa-direct` → `-61 (No data available)` | **正常现象**，`-p` 匹配 provider（`efa`）不是 fabric | 用 `fi_info \| grep fabric` |
 | `fi_info: command not found` | 不在默认 PATH | `export PATH=/opt/amazon/efa/bin:$PATH` |
