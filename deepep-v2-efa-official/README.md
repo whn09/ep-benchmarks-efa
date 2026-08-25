@@ -24,19 +24,20 @@ NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0     # both, or it crashes
 ```
 
 12 SM, `--test-first-only`, no `EP_BUFFER_DEBUG`, mean over **all** ranks; `SO` =
-printed per-rank scale-out bytes ÷ time, not a wire rate
+per-rank scale-out bytes ÷ time as printed, which includes intra-node traffic and
+so is not a wire rate
 ([full data](results/p5en_2n4n_20260825/summary.txt)):
 
 | dispatch | type 2 (default) | **type 5** |
 |---|---|---|
 | 2 nodes / 16 ranks, 8192 tok | 1644.0 µs / 74.0 GB/s | **1502.9 µs / 81.2** |
 | 2 nodes / 16 ranks, 128 tok | 365.1 µs | **169.4 µs (2.16×)** |
-| 4 nodes / 32 ranks, 8192 tok | 4316.2 µs / 51.5 GB/s | **3955.3 µs / 56.0** (84% of wire) |
-| 4 nodes / 32 ranks, 128 tok | 1001.2 µs, reps 833–1083 | **184.5 µs (5.43×)**, all 32 ranks in 183.4–185.9 |
+| 4 nodes / 32 ranks, 8192 tok | 4315.0 µs / 51.5 GB/s | **3955.3 µs / 56.0** (84% of wire) |
+| 4 nodes / 32 ranks, 128 tok | 1003.2 µs, reps 833.1–1083.2 | **184.3 µs (5.44×)**, all 32 ranks in 183.4–185.6 |
 
 **The gap widens with scale**, which is what makes this worth chasing: from 2 to 4
-nodes type-2 decode dispatch goes 365 → 1001 µs (2.7×) while type 5 goes
-169.4 → 184.5 µs (1.09×).
+nodes type-2 decode dispatch goes 365.1 → 1003.2 µs (2.75×) while type 5 goes
+169.4 → 184.3 µs (1.09×).
 
 **Both are needed because the crash is informative.** `NCCL_GIN_TYPE=5` alone gives
 `ncclGinValidateSignalRequest: GIN strong signals are required, but the GIN plugin
@@ -269,23 +270,26 @@ mean over all ranks, no `EP_BUFFER_DEBUG`
 
 | | 2N dispatch | 2N redComb | 2N sum | 4N dispatch | 4N redComb | 4N sum |
 |---|---|---|---|---|---|---|
-| 6 SM | 2290.5 µs | 7371.6 µs | 9662.1 µs | 4031.7 µs | 9494.3 µs | 13526.0 µs |
-| 12 SM | 1502.9 µs | 4226.0 µs | 5728.9 µs | 3955.3 µs | 7963.6 µs | 11918.9 µs |
-| 16 SM | 1510.6 µs | 3568.1 µs | 5078.7 µs | — | — | — |
-| **24 SM** | 1535.7 µs | **3364.3 µs** | **4900.0 µs** | 3972.6 µs | **7709.8 µs** | **11682.4 µs** |
+| 6 SM | 2290.5 µs | 7377.7 µs | 9668.2 µs | 4030.7 µs | 9518.8 µs | 13549.4 µs |
+| 12 SM | 1502.9 µs | 4237.9 µs | 5740.8 µs | 3955.3 µs | 7943.2 µs | 11898.5 µs |
+| 16 SM | 1510.5 µs | 3584.1 µs | 5094.6 µs | — | — | — |
+| **24 SM** | 1535.7 µs | **3362.6 µs** | **4898.3 µs** | 3972.7 µs | **7728.3 µs** | **11701.0 µs** |
 | 32 SM | 1576.5 µs | 3486.4 µs | 5062.9 µs | — | — | — |
 
 Reps: 24 SM ×3 at 2N, 12 SM ×3 and 24 SM ×2 at 4N; single runs elsewhere.
 
 **Dispatch is nearly flat from 12 to 24 SM** (+2.2% at 2 nodes, +0.4% at 4) — it is
-*reduced combine* that pays for a small SM count. So the trade is 33 µs of dispatch for
-862 µs of reduced combine at 2 nodes (layer total **−14.5%**), and a much smaller but
-same-signed trade at 4 nodes (**−2.0%**). Decode agrees: at 2 nodes 24 SM wins outright
-(dispatch 147.3 vs 169.4 µs, redComb 160.4 vs 179.0 µs); at 4 nodes decode dispatch is
-flat across 6/12/24 SM (181–185 µs) and 24 SM wins on redComb (239.1 vs 253.5 µs, −5.7%).
+*reduced combine* that pays for a small SM count. So the trade is 32.8 µs of dispatch for
+875.3 µs of reduced combine at 2 nodes (layer total **−14.7%**), and a much smaller but
+same-signed trade at 4 nodes (**−1.7%**). Decode agrees: at 2 nodes 24 SM wins outright
+(dispatch 147.3 vs 169.4 µs, redComb 160.1 vs 179.0 µs); at 4 nodes decode dispatch is
+flat across 6/12/24 SM (181.2–184.7 µs) and 24 SM wins on redComb (239.6 vs 253.3 µs, −5.4%).
 
-**6 SM is the wrong choice at every scale** — 52% worse than 24 SM at 2 nodes, 13.5%
-worse at 4 — and it never hangs, so nothing is protecting you from it.
+**6 SM is the wrong choice at every scale** — against 24 SM, dispatch is +49.2% and
+dispatch+redComb +97.4% at 2 nodes; at 4 nodes dispatch is only +1.5% but
+dispatch+redComb is +15.8%. State which of the two you mean: they diverge this widely
+because reduced combine, not dispatch, is what pays for a small SM count. 6 SM never
+hangs, so nothing is protecting you from it.
 
 ### The GIN evidence to look for
 
@@ -338,21 +342,54 @@ Pass `IGNORE_LOCAL=1` for a wire-rate run.
 | op | 2 nodes / 16 ranks | | | 4 nodes / 32 ranks | | |
 |---|---|---|---|---|---|---|
 | | SO GB/s | SU GB/s | time | SO GB/s | SU GB/s | time |
-| dispatch | 79–80 | 257–263 | 1535.6 µs | 55–56 | 111–113 | 3972.6 µs |
-| expanded dispatch | 79–80 | 258–262 | 1537.3 µs | 55–56 | 111–113 | 3970.7 µs |
+| dispatch | 79–80 | 257–263 | 1535.7 µs | 55–56 | 111–113 | 3972.7 µs |
+| expanded dispatch | 79–80 | 258–262 | 1537.3 µs | 55–56 | 111–113 | 3971.3 µs |
 | cached dispatch | 75–76 | 244–249 | 1620.7 µs | 51–52 | 103–106 | 4256.6 µs |
-| combine | 62–73 | 202–239 | 3529.1 µs | 51–57 | 103–115 | 7702.1 µs |
-| reduced combine | 64–79 | 209–259 | 3364.3 µs | 51–57 | 103–115 | 7710.1 µs |
+| combine | 62–73 | 202–239 | 3534.0 µs | 51–57 | 103–115 | 7710.7 µs |
+| reduced combine | 64–79 | 209–259 | 3362.6 µs | 51–57 | 103–115 | 7728.3 µs |
 
-bytes/rank: dispatch 395.9–402.4 MB (2N) / 441.4–447.7 MB (4N); combine 759.7–772.1 MB /
-847.0–859.0 MB. 3 reps at 2N, 2 at 4N; SO/SU are min–max over all ranks and reps, time is
-the pooled mean.
+**scale-up** bytes/rank (the `bytes` the log prints): dispatch 395.9–402.4 MB (2N) /
+441.4–447.7 MB (4N); combine 759.7–772.1 / 847.0–859.0 MB. **scale-out** bytes/rank are
+not printed — recover them as `SO × time`: dispatch 121.3–123.0 MB (2N) / 219.1–223.6 MB
+(4N). 3 reps at 2N (48 rank observations), 2 at 4N (64); **time is the mean, `SO`/`SU`
+are min–max across ranks** — two different statistics, see below.
 
 **Dispatch runs at 80% of the wire ceiling at 2 nodes and 84% at 4** — 4 nodes is the
 higher wire fraction because 3/4 of the traffic leaves the box instead of 1/2, even
-though the raw `SO` is lower. **Going 2 → 4 nodes costs 2.59× in dispatch time** for 2×
-the ranks and 1.12× the per-rank bytes, so scale-out here is sublinear in a way dispatch
-bandwidth alone does not show; report the µs.
+though the raw `SO` is lower: true cross-node bytes go 61.0 → 165.9 MB per rank (×2.72)
+while time goes ×2.59. **Going 2 → 4 nodes costs 2.59× in dispatch time** for 2× the
+ranks, so scale-out here is sublinear in a way dispatch bandwidth alone does not show;
+report the µs.
+
+#### Why `SO`/`SU` are ranges — it is not run-to-run variance
+
+The ranges are the **min–max across the 48 (or 64) rank observations**, while the time
+column is their mean. Decomposed, at 2N / 24 SM / 8192 tok:
+
+| cross-rank spread | time | printed bytes | `SO` |
+|---|---|---|---|
+| dispatch | **0.5%** | 1.6% | 1.3% |
+| cached dispatch | 0.4% | 1.6% | 1.3% |
+| combine | **16.1%** | 1.6% | 16.5% |
+| reduced combine | **20.7%** | 1.6% | 21.3% |
+
+1. **For dispatch the range comes from the denominator, not the speed.** Time varies 0.5%
+   across ranks (0.9% at 4N), but each rank routes a different token count
+   (`get_unbalanced_scores`), so its byte count varies 1.4–1.6%, and `GB/s = that rank's
+   bytes ÷ that rank's time` inherits it.
+2. **Integer printing adds a floor.** `test_ep.py` prints GB/s with `:.0f`. At `SO ≈ 79.6`
+   one integer step is **1.26%**; at `SO ≈ 55.8` it is **1.79%**. So `79–80` and `55–56`
+   are two adjacent integers — **the narrowest range this format can express.**
+3. **Only combine is genuinely spread, and the driver is time, not bytes** — that is the
+   per-node layering below (node1 3300.3 vs node2 3767.7 µs at 2N, 13.2%; the pooled
+   4-node figure is 4.2% only because the slow machine differs between its two reps).
+   Dispatch does not layer at all (0.1% between nodes).
+4. **Reproducibility is excellent even for combine.** All-rank means per rep, 2N / 24 SM:
+   dispatch 1535.5 / 1537.0 / 1534.5 µs (**0.16%**), combine 3533.2 / 3535.1 / 3533.6
+   (**0.05%**), reduced combine 3366.3 / 3356.1 / 3365.5 (**0.30%**); 4N dispatch 3971.6 /
+   3973.8 (**0.06%**). Combine's 16–21% is a **reproducible structural spread across
+   ranks**, not instability. Regenerate the whole block with
+   `python3 results/p5en_2n4n_20260825/make_tables.py`.
 
 ### Decode (`--num-tokens=128`) — latency
 
@@ -363,9 +400,9 @@ At this size only latency is meaningful: 5.6–6.4 MB per rank, 11–19 GB/s SO.
 |---|---|---|
 | dispatch | 147.3 µs | 184.7 µs |
 | expanded dispatch | 146.6 µs | 184.0 µs |
-| cached dispatch | 135.8 µs | 184.2 µs |
-| combine | 151.9 µs | 236.5 µs |
-| reduced combine | 160.4 µs | 239.1 µs |
+| cached dispatch | 135.8 µs | 184.3 µs |
+| combine | 151.9 µs | 236.9 µs |
+| reduced combine | 160.1 µs | 239.6 µs |
 
 **Crossing from 2 to 4 nodes costs only +37 µs of dispatch (+25%)** while doubling the
 rank count — decode dispatch on type 5 barely notices scale. combine is where 4 nodes
@@ -373,20 +410,27 @@ actually hurts (+56%). Two pending PRs take 2-node dispatch to 106 µs; see belo
 
 ### combine is layered by node — this decides how you aggregate
 
-dispatch is uniform across ranks; combine and reduced combine split cleanly by machine.
-One 2-node / 24 SM / 8192 tok run, mean over each node's 8 ranks:
+dispatch is uniform across ranks and across machines; combine and reduced combine split
+cleanly by machine. 2 nodes / 24 SM / 8192 tok, 3 reps pooled, mean over each node's
+8 ranks:
 
 | op | node 1 | node 2 |
 |---|---|---|
-| dispatch | 1536.0 µs | 1535.0 µs (0.1% apart) |
-| combine | 3302.9 µs | 3763.9 µs (**14% apart**) |
-| reduced combine | 3091.7 µs | 3653.9 µs (**18% apart**) |
+| dispatch | 1535.0 µs | 1536.3 µs (0.1% apart) |
+| combine | 3300.3 µs | 3767.7 µs (**13.2% apart**) |
+| reduced combine | 3074.9 µs | 3650.3 µs (**17.1% apart**) |
 
-Which machine is the slow one flips between runs, so a per-node combine mean lands at
-either ~3100 or ~3670 µs depending on which log you happen to read — that looks like
-bistable behaviour and is not. Pooled over all 16 ranks the three reps agree to 1.7%
-(3391.5 / 3335.7 / 3365.5 µs). **Always pool every rank.** We draw no mechanism
-conclusion about *why* one machine is slower.
+Which machine is the slow one is **fixed within a round of consecutive reps and flips
+between rounds** — it is a per-launch property, not per-iteration noise. All three
+official 24 SM reps put node 2 slow (combine 3764 / 3771 / 3769 µs against
+3303 / 3299 / 3299); both `main` 24 SM reps and both pin reps put the other machine
+slow. The magnitude is stable across all of them at 14–18%. So pooling reps does *not*
+flatten 2-node layering, and a per-node combine mean lands at either ~3100 or ~3770 µs
+depending on which log you happen to read. Pooled over all 16 ranks the three reps agree
+to 0.30% (reduced combine 3366.3 / 3356.1 / 3365.5 µs) — **always pool every rank.**
+At 4 nodes the slow machine differs between the two reps (node 4 in rep 1 at 8087 µs,
+node 1 in rep 2 at 8117 µs), which is why the pooled 4-node layering looks small
+(4.2%). We draw no mechanism conclusion about *why* one machine is slower.
 
 ### Versus building the whole stack from source
 
@@ -397,15 +441,15 @@ active on both sides: the `7a6059a3` pin (source NCCL `2.30.7-1` + source aws-of
 
 | | pin, source stack | packaged, type 5 |
 |---|---|---|
-| 2N / 8192 tok dispatch | 1515.0 µs | **1502.9 µs** |
-| 2N / 8192 tok cached dispatch | 1749.0 µs | **1591.0 µs** (−9.0%) |
-| 2N / 128 tok dispatch | 303.9 µs | **169.4 µs** (1.79×) |
-| 4N / 8192 tok dispatch | 3961.0 µs | **3955.3 µs** |
-| 4N / 8192 tok cached dispatch | 4710.3 µs | **4239.4 µs** (−10.0%) |
-| 4N / 128 tok dispatch | 320.8 µs | **184.5 µs** (1.74×) |
+| 2N / 8192 tok dispatch | 1517.0 µs | **1502.9 µs** |
+| 2N / 8192 tok cached dispatch | 1749.1 µs | **1591.0 µs** (−9.0%) |
+| 2N / 128 tok dispatch | 301.2 µs | **169.4 µs** (1.78×) |
+| 4N / 8192 tok dispatch | 3962.5 µs | **3955.3 µs** |
+| 4N / 8192 tok cached dispatch | 4709.2 µs | **4239.7 µs** (−10.0%) |
+| 4N / 128 tok dispatch | 320.9 µs | **184.3 µs** (1.74×) |
 
-Prefill dispatch is a tie (0.1–0.8% apart). The packaged path wins cached dispatch by
-9–10% and decode dispatch by 1.74–1.79×. Everything the hand-built stack was assembled
+Prefill dispatch is a tie (0.2–0.9% apart). The packaged path wins cached dispatch by
+9.9–11.1% and decode dispatch by 1.74–1.78×. Everything the hand-built stack was assembled
 to obtain — GDA ops, the CE counting signal, the GDAKI plugin — ships in installer 1.50.0.
 
 ### Why the GIN backend is the lever and the QP layout is not
@@ -417,14 +461,14 @@ different QP layouts, and the flag really does work: pass `--num-allocated-qps 5
 
 | 2N / 12 SM / 8192 tok | dispatch | cached dispatch | combine | reduced combine |
 |---|---|---|---|---|
-| type 2, default 11 contexts | 1644.0 µs | 1652.2 µs | 3512.5 µs | 4196.6 µs |
-| type 2, `--num-allocated-qps 5` | 1631.1 µs | 1614.5 µs | 3719.3 µs | 4281.0 µs |
-| type 5, default 11 contexts | **1502.9 µs** | **1591.0 µs** | 3629.9 µs | 4226.0 µs |
-| type 5, `--num-allocated-qps 5` | 1508.5 µs | 1743.9 µs | 3605.1 µs | 4236.6 µs |
+| type 2, default 11 contexts | 1644.0 µs | 1652.5 µs | 3555.2 µs | 4219.6 µs |
+| type 2, `--num-allocated-qps 5` | 1631.1 µs | 1615.0 µs | 3719.3 µs | 4289.8 µs |
+| type 5, default 11 contexts | **1502.9 µs** | **1591.0 µs** | 3602.5 µs | 4237.9 µs |
+| type 5, `--num-allocated-qps 5` | 1508.5 µs | 1743.9 µs | 3605.1 µs | 4228.9 µs |
 
 Plain dispatch moves −0.8% on type 2 and not at all on type 5. Where the layout *does*
 matter is **cached** dispatch, and there 5 contexts is 9.6% **worse** on type 5; at 4
-nodes it is 19.6% worse on decode dispatch (1001.2 → 1197.5 µs). **Leave it at the
+nodes it is 19.3% worse on decode dispatch (1003.2 → 1197.0 µs). **Leave it at the
 default 11.** The source arithmetic below explains why the layouts differ and confirms
 the kernel is identical on both sides — which is what makes the backend the only
 remaining variable.
@@ -501,15 +545,15 @@ request **replaces** the default, bounded only by
 |---|---|---|---|
 | release `ec623f3`, default env (type 2) | 1644.0 µs | 74.0 | 74.0 |
 | release, `--num-allocated-qps 5` (type 2) | 1631.1 µs | 75.0 | 75.0 |
-| pin `7a6059a3`, source stack, `--skip-check` | 1515.0 µs | 80.6 | 80.6 |
-| release, full 5-var route B | 1505.4 µs | 81.0 | 81.0 |
+| pin `7a6059a3`, source stack, `--skip-check` | 1517.0 µs | 80.6 | 80.6 |
+| release, full 5-var route B | 1504.4 µs | 81.0 | 81.0 |
 | **release, `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0`** | **1502.9 µs** | 81.2 | 81.2 |
 | `main` `8e7b42e` + the type-5 pair | 1502.0 µs | 81.0 | 81.0 |
 
 `wire% = SO × (N−1)/N ÷ 50 GB/s`; at N=2 that is numerically SO. The two env vars account
 for the entire spread — the other three route-B vars add nothing on top of them, and
 `main` is indistinguishable from `ec623f3`. `OFI_NCCL_GIN_STRONG_SIGNAL=1` on its own is
-actively bad at 128 tok (750.4 µs mean, 32-rank spread 371–1130 µs), consistent with the
+actively bad at 128 tok (750.4 µs mean, 16-rank spread 371.0–1130.0 µs), consistent with the
 unordered kernel only requiring weak signals.
 
 ### Decode (`--num-tokens=128`) — two independent wins that stack
@@ -526,7 +570,7 @@ base with the unpatched `ec623f3` one. Two things keep the comparison honest: th
 clamp-off control (`EP_MIN_TOKENS_PER_PART=1`) runs **inside the patched image**, so the
 clamp's effect is measured with the base held constant (171.5 → 112.7 µs at 2 nodes,
 −34.3%); and `main` `8e7b42e`, which contains everything the patched base has and more,
-measures within 0.1–1.1% of `ec623f3` on 8 paired rows (§ Results).
+measures within 0.7% of `ec623f3` on 8 paired rows (§ Results).
 
 | PR (base `main`) | What |
 |---|---|
@@ -537,23 +581,23 @@ measures within 0.1–1.1% of `ec623f3` on 8 paired rows (§ Results).
 
 | arm | dispatch | vs its own backend | combine | reduced combine |
 |---|---|---|---|---|
-| unpatched, type 2 | 365.1 µs | 1.00× | 175.0 µs | 192.4 µs |
+| unpatched, type 2 | 365.1 µs | 1.00× | 175.1 µs | 192.7 µs |
 | #1 + #2, type 2 | 237.1 µs | **−35.1%** | 176.3 | 193.6 |
 | unpatched, type 5 | 169.4 µs | 1.00× | 162.7 | 179.0 |
-| #1 + #2, type 5 | 112.7 µs | **−33.5%** | 162.4 | 178.9 |
-| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **106.4 µs** | **−37.2%** | 162.2 | 178.9 |
-| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 171.5 µs | clamp-off control | 162.6 | 179.0 |
+| #1 + #2, type 5 | 112.7 µs | **−33.5%** | 162.2 | 178.9 |
+| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **106.4 µs** | **−37.2%** | 162.1 | 178.9 |
+| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 171.5 µs | clamp-off control | 162.6 | 178.8 |
 
 **4 nodes / 32 ranks / 12 SM, 128 tok:**
 
 | arm | dispatch | vs its own backend | combine | reduced combine |
 |---|---|---|---|---|
-| unpatched, type 2 | 1001.2 µs | 1.00× | 343.3 µs | 350.7 µs |
-| #1 + #2, type 2 | 627.2 µs | **−37.4%** | 335.1 | 347.8 |
-| unpatched, type 5 | 184.5 µs | 1.00× | 243.6 | 253.5 |
-| #1 + #2, type 5 | 169.5 µs | **−8.1%** | 243.7 | 253.1 |
-| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **155.9 µs** | **−15.5%** | 243.9 | 251.7 |
-| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 184.1 µs | clamp-off control | 243.3 | 253.1 |
+| unpatched, type 2 | 1003.2 µs | 1.00× | 344.2 µs | 357.0 µs |
+| #1 + #2, type 2 | 627.4 µs | **−37.5%** | 336.9 | 346.8 |
+| unpatched, type 5 | 184.3 µs | 1.00× | 244.2 | 253.3 |
+| #1 + #2, type 5 | 169.5 µs | **−8.0%** | 243.5 | 252.9 |
+| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **155.9 µs** | **−15.4%** | 243.6 | 251.9 |
+| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 184.1 µs | clamp-off control | 243.5 | 252.9 |
 
 Three things to read off these:
 
@@ -562,8 +606,8 @@ Three things to read off these:
 2. **combine and reduced combine are untouched to within 1% in every row.** That is the
    evidence the PR mechanism is part geometry inside dispatch and not the network: EFA is
    doing the same work either way. Expanded and cached dispatch track plain dispatch.
-3. **The clamp's win collapses at 4 nodes on type 5** — −8.1% instead of −33.5% — and the
-   clamp-off control (184.1 µs) sits inside noise of unpatched (184.5 µs), which confirms
+3. **The clamp's win collapses at 4 nodes on type 5** — −8.0% instead of −33.5% — and the
+   clamp-off control (184.1 µs) sits inside noise of unpatched (184.3 µs), which confirms
    it is the clamp that stopped paying rather than something else in the PRs. Type-5
    4-node decode dispatch has a floor around **156–185 µs** that part geometry does not
    reach; `EP_NUM_SUB_PARTS=1` gets furthest and no further. This is unexplained — do not
@@ -579,7 +623,7 @@ puts instead of one 3-token put. Sub-parts already have both guards parts lack (
 `kBatchSize`, plus `EP_SM100_MIN_SUB_TOKENS`).
 
 **Which to use.** Only care about prefill → take `main` as-is; the PRs are within noise on
-prefill (2N/24 SM/8192: 1535.7 µs unpatched vs 1536.0 µs; 4N/12 SM/8192: 3955.3 vs 3955.0).
+prefill (2N/24 SM/8192: 1535.7 µs unpatched vs 1536.0 µs; 4N/12 SM/8192: 3955.3 vs 3955.3).
 **Publishing decode / small-token numbers → cherry-pick both**, and set the type-5 env pair
 regardless. #1 alone changes no default, so it only pays stacked on #2. After they merge,
 #2's default of 15 applies automatically — no env var needed. To get the unclamped geometry
@@ -588,7 +632,7 @@ back as a control use `EP_MIN_TOKENS_PER_PART=1`, which **short-circuits** to th
 
 **With the PRs applied, 12 SM beats 24 SM for 2-node decode dispatch** (112.7 vs 145.3 µs),
 so the 24-SM recommendation above holds for unpatched code. At 4 nodes the two tie on
-dispatch + reduced combine (422.6 vs 422.4 µs).
+dispatch + reduced combine (422.4 vs 422.2 µs).
 
 ## Rules that decide whether a number is real
 

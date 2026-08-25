@@ -1,6 +1,10 @@
 DeepEP-v2 on EFA / p5en.48xlarge -- 2-node and 4-node campaign, 2026-08-25
 ==========================================================================
 
+Every number in this file is emitted by make_tables.py from the logs in logs/.
+Regenerate with `python3 make_tables.py` and paste; do not hand-edit a table.
+
+
 HEADLINE
 --------
 On the packaged EFA installer 1.50.0 stack, `libnccl-net-ofi.so` registers TWO
@@ -10,13 +14,13 @@ either way, but NCCL selects type 2 by default. Two env vars pick GDAKI:
 
     NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0
 
-    2N / 12 SM / 8192 tok  dispatch  1644.0 -> 1502.9 us  (74.0 -> 81.2 GB/s SO)
+    2N / 12 SM / 8192 tok  dispatch  1644.0 -> 1502.9 us  (-8.6%, 74.0 -> 81.2 GB/s SO)
     2N / 12 SM /  128 tok  dispatch   365.1 ->  169.4 us  (2.16x)
-    4N / 12 SM / 8192 tok  dispatch  4316.2 -> 3955.3 us  (51.5 -> 56.0 GB/s SO)
-    4N / 12 SM /  128 tok  dispatch  1001.2 ->  184.5 us  (5.43x)
+    4N / 12 SM / 8192 tok  dispatch  4315.0 -> 3955.3 us  (-8.3%, 51.5 -> 56.0 GB/s SO)
+    4N / 12 SM /  128 tok  dispatch  1003.2 ->  184.3 us  (5.44x)
 
 Set them and nothing else. Everything else we tried is neutral or worse, and
-the two pending DeepEP PRs stack on top of this for another 33% of 2-node
+the two pending DeepEP PRs stack on top of this for another 33.5% of 2-node
 decode dispatch (TABLE 7).
 
 
@@ -77,17 +81,31 @@ DENOMINATORS  (state these with every rate; a GB/s alone has flipped a
 us            per-op mean over ALL ranks -- 16 at 2 nodes, 32 at 4 nodes,
               pooled from every node's log. Node-level means are NOT
               interchangeable with this: combine is layered by node (see
-              NODE LAYERING), so a one-node mean of combine can be 12% off.
+              NODE LAYERING), so a one-node mean of combine can be 14% off.
               Where several reps are pooled, the rep means are averaged.
-SO GB/s       scale-out bytes / time, as printed by test_ep.py. WITHOUT
-              --ignore-local-traffic this includes intra-node traffic, so it is
-              NOT a wire rate.
+SO GB/s       scale-out bytes / time, as printed by test_ep.py. test_ep.py:253
+              loops over ALL N scale-out destinations including this node's own,
+              so WITHOUT --ignore-local-traffic this includes intra-node
+              traffic and is NOT a wire rate.
+SU GB/s       the printed `bytes` field / time, exactly. That field is
+              num_scaleup_bytes (test_ep.py:271) -- all tokens this rank
+              received. Scale-out bytes are NOT printed; recover with SO * time.
 wire %        SO * (N-1)/N / 50 GB/s.  N=2 -> wire% is numerically equal to SO.
-              N=4 -> wire% = SO * 1.5.
-bytes/rank    8192 tok: dispatch 395.9-402.4 MB @2N, 441.4-447.7 MB @4N;
+              N=4 -> wire% = SO * 1.5. The (N-1)/N factor assumes the N
+              destinations are evenly loaded -- it is an approximation. For an
+              exact figure re-run with --ignore-local-traffic (IGNORE_LOCAL=1),
+              which makes SO the true cross-node bytes / time.
+SO/SU ranges  MIN-MAX ACROSS RANKS at one instant, not run-to-run variance --
+              a different statistic from the us column, which is a mean. See
+              SPREAD below before concluding anything about variance.
+bytes/rank    SCALE-UP (= the printed `bytes`).
+              8192 tok: dispatch 395.9-402.4 MB @2N, 441.4-447.7 MB @4N;
               combine 759.7-772.1 MB @2N, 847.0-859.0 MB @4N.
               128 tok: dispatch 5.6-6.3 MB @2N, 5.8-6.4 MB @4N; combine
               10.8-12.1 MB @2N, 11.1-12.3 MB @4N.
+              SCALE-OUT (= SO * time, includes intra-node), 8192 tok: dispatch
+              121.3-123.0 MB @2N, 219.1-223.6 MB @4N; combine 232.7-236.2 MB,
+              420.9-428.5 MB.
 "redComb"     reduced combine.
 
 
@@ -109,17 +127,17 @@ TABLE 2 -- which GIN backend, 4 nodes / 32 ranks / 12 SM
 --------------------------------------------------------
                           8192 tok                       128 tok
 arm                       dispatch  SO GB/s  wire%       dispatch  SO GB/s
-type 2 (default env)      4316.2    51.5     77.3%       1001.2    3.1
-type 5 (the two vars)     3955.3    56.0     84.0%       184.5     16.5
-                          -8.4%                          -81.6% (5.43x)
+type 2 (default env)      4315.0    51.5     77.2%       1003.2    3.1
+type 5 (the two vars)     3955.3    56.0     84.0%       184.3     16.5
+                          -8.3%                          -81.6% (5.44x)
 
 The 4-node decode win is much larger than the 2-node one because type 2 gets
-*worse* with scale and type 5 barely does: type-2 dispatch went 365 -> 1001 us
-from 2 to 4 nodes (2.7x) while type-5 went 169.4 -> 184.5 us (1.09x).
+*worse* with scale and type 5 barely does: type-2 dispatch went 365.1 -> 1003.2
+us from 2 to 4 nodes (2.75x) while type-5 went 169.4 -> 184.3 us (1.09x).
 type-2 4-node decode is also unstable run to run -- five reps spread
-833 / 987 / 1016 / 1045 / 1083 us, and one arm with --num-allocated-qps 5 hit
-1197 us. type-5 reps land at 184.3 / 184.5 / 184.8 with all 32 ranks inside
-183.4-185.9 us.
+833.1 / 986.7 / 1045.4 / 1067.5 / 1083.2 us, and one arm with
+--num-allocated-qps 5 hit 1197.0 us. The type-5 run has all 32 ranks inside
+183.4-185.6 us.
 
 
 TABLE 3 -- what else we tried, and what it was worth
@@ -131,15 +149,15 @@ type-2 default, rep 2                                 371.1     (+-3% run noise)
 + FI_EFA_USE_HW_CNTR=1                                375.8     no
 + NCCL_RMA_DISABLE=1                                  359.5     no
 + OFI_NCCL_GIN_STRONG_SIGNAL=1                        750.4     NO -- and the
-                                                                32-rank spread
+                                                                16-rank spread
                                                                 is 371-1130 us
 + NCCL_SYM_GIN_KERNELS_ENABLE=0 alone                 359.4     no
 + NCCL_GIN_TYPE=5 alone                               CRASH     see MECHANISM
 + NCCL_GIN_TYPE=5 + NCCL_RMA_DISABLE=1                CRASH     same crash
 + NCCL_GIN_TYPE=5 + NCCL_SYM_GIN_KERNELS_ENABLE=0     169.4     YES
-+ all five route-B vars                                170.0     no better than
++ all five route-B vars                               170.0     no better than
                                                                 the pair
-+ all five, rep 2                                      170.0
++ all five, rep 2                                     170.0
 
 So the pair is minimal AND sufficient: the other three route-B vars add
 nothing on top of it, and OFI_NCCL_GIN_STRONG_SIGNAL=1 is actively harmful --
@@ -151,53 +169,56 @@ TABLE 4 -- --num-allocated-qps 5 : not worth setting
 The flag works at ec623f3 -- the header goes `#QPs: 11/11` -> `#QPs: 5/5` and
 the debug line prints the layout `5 / 49 / 5`. What it buys:
 
-arm                                   dispatch  cached disp  combine   redComb
-2N/12SM/8192, type 2, default         1644.0    1652.2       3512.5    4196.6
-2N/12SM/8192, type 2, qps 5           1631.1    1614.5       3719.3    4281.0
-2N/12SM/8192, type 5, default         1502.9    1591.0       3629.9    4226.0
-2N/12SM/8192, type 5, qps 5           1508.5    1743.9       3605.1    4236.6
-4N/12SM/128,  type 2, default         1001.2     981.9        343.3     350.7
-4N/12SM/128,  type 2, qps 5           1197.5    1018.8        328.8     343.5
+arm                                dispatch  cached disp  combine  redComb
+2N/12SM/8192, type 2, default        1644.0    1652.5    3555.2    4219.6
+2N/12SM/8192, type 2, qps 5          1631.1    1615.0    3719.3    4289.8
+2N/12SM/8192, type 5, default        1502.9    1591.0    3602.5    4237.9
+2N/12SM/8192, type 5, qps 5          1508.5    1743.9    3605.1    4228.9
+4N/12SM/128,  type 2, default        1003.2     989.9     344.2     357.0
+4N/12SM/128,  type 2, qps 5          1197.0    1018.8     333.0     342.2
 
 Plain dispatch: -0.8% on type 2, +0.4% (i.e. nothing) on type 5. Where the QP
 layout does matter is CACHED dispatch, and there 5 contexts is 9.6% WORSE on
-type 5 (1591.0 -> 1743.9). At 4 nodes it is 19.6% worse on decode dispatch.
-Leave it at the default 11.
+type 5 (1591.0 -> 1743.9 us). At 4 nodes it is 19.3% worse on decode dispatch
+(1003.2 -> 1197.0 us). Leave it at the default 11.
 
 
 TABLE 5 -- --num-sms scan on type 5, 8192 tok (prefill)
 -------------------------------------------------------
 2 nodes / 16 ranks                        4 nodes / 32 ranks
 SM   dispatch  combine  redComb  d+rC     dispatch  combine  redComb  d+rC
- 6   2290.5    6052.8   7371.6   9662.1   4031.7    8225.2   9494.3   13526.0
-12   1502.9    3629.9   4226.0   5728.9   3955.3    7850.0   7963.6   11918.9
-16   1510.6    3197.1   3568.1   5078.7   -         -        -        -
-24   1535.7    3528.9   3364.3   4900.0   3972.6    7702.1   7709.8   11682.4
-32   1576.5    3515.1   3486.4   5062.9   -         -        -        -
+6    2290.5    6052.8   7377.7   9668.2   4030.7    8268.2   9518.8   13549.4
+12   1502.9    3602.5   4237.9   5740.8   3955.3    7842.6   7943.2   11898.5
+16   1510.5    3197.1   3584.1   5094.6   -         -        -        -
+24   1535.7    3534.0   3362.6   4898.3   3972.7    7710.7   7728.3   11701.0
+32   1576.5    3511.6   3486.4   5062.9   -         -        -        -
 
 Reps: 24 SM x3 at 2N, 12 SM x3 and 24 SM x2 at 4N; single runs elsewhere.
 
-**24 SM is the operating point at both scales.** At 2 nodes it gives up 33 us
-of dispatch (+2.2%) to win 862 us of reduced combine (-20.4%), so the layer
-total drops 14.5%. At 4 nodes the same trade is much smaller but the same
-sign: +0.4% dispatch for -3.2% redComb, layer total -2.0%.
+**24 SM is the operating point at both scales.** At 2 nodes it gives up 32.8 us
+of dispatch (+2.2%) to win 875.3 us of reduced combine (-20.7%), so the layer
+total drops 14.7%. At 4 nodes the same trade is much smaller but the same
+sign: +0.4% dispatch for -2.7% redComb, layer total -1.7%.
 
-**6 SM is wrong at every scale** -- 52% worse at 2 nodes, 13.5% worse at 4.
-Dispatch alone is nearly flat from 12 to 24 SM (2.2% at 2N, 0.4% at 4N); it is
-reduced combine that pays for a small SM count.
+**6 SM is wrong at every scale.** Against the 24 SM operating point, both
+metrics stated: at 2 nodes dispatch +49.2% and dispatch+redComb +97.4%; at
+4 nodes dispatch only +1.5% but dispatch+redComb +15.8%. Dispatch alone is
+nearly flat from 12 to 24 SM (+2.2% at 2N, +0.4% at 4N) -- it is reduced
+combine that pays for a small SM count, and that is why the two metrics
+disagree so widely at 6 SM.
 
 
 TABLE 6 -- --num-sms on type 5, 128 tok (decode)
 ------------------------------------------------
 2 nodes / 16 ranks                4 nodes / 32 ranks
 SM   dispatch  combine  redComb   dispatch  combine  redComb
- 6   -         -        -         181.2     287.5    303.5
-12   169.4     162.7    179.0     184.5     243.6    253.5
-24   147.3     151.9    160.4     184.7     236.5    239.1
+6    -         -        -         181.2     287.5    303.8
+12   169.4     162.7    179.0     184.3     244.2    253.3
+24   147.3     151.9    160.1     184.7     236.9    239.6
 
-At 2 nodes 24 SM wins outright (-13.0% dispatch, -10.4% redComb).
-At 4 nodes dispatch is flat across 6/12/24 SM (181-185 us, 2.4% spread) and
-only reduced combine moves: 24 SM is -5.7% vs 12 SM. So 24 SM again, but on
+At 2 nodes 24 SM wins outright (-13.0% dispatch, -10.6% redComb).
+At 4 nodes dispatch is flat across 6/12/24 SM (181.2-184.7 us, 1.9% spread) and
+only reduced combine moves: 24 SM is -5.4% vs 12 SM. So 24 SM again, but on
 unpatched code only -- see TABLE 7 for what changes once the PRs are applied.
 
 
@@ -209,24 +230,24 @@ JIT; PR #2 adds kMinTokensPerPart (default 15) so kNumParts stops being
 maximal at small batch. Interleaved arms, 128 tok, no EP_BUFFER_DEBUG.
 
 2 nodes / 16 ranks / 12 SM        dispatch  vs its own backend  combine  redComb
-unpatched ec623f3, type 2          365.1    1.00x               175.0    192.4
-#1+#2, type 2                      237.1    -35.1%              176.3    193.6
-unpatched ec623f3, type 5          169.4    1.00x               162.7    179.0
-#1+#2, type 5                      112.7    -33.5%              162.4    178.9
-#1+#2 + EP_NUM_SUB_PARTS=1, t5     106.4    -37.2%              162.2    178.9
-#1+#2 + EP_MIN_TOKENS_PER_PART=1   171.5    clamp-off control    162.6    179.0
+unpatched ec623f3, type 2          365.1    1.00x                175.1    192.7
+#1+#2, type 2                      237.1    -35.1%               176.3    193.6
+unpatched ec623f3, type 5          169.4    1.00x                162.7    179.0
+#1+#2, type 5                      112.7    -33.5%               162.2    178.9
+#1+#2 + EP_NUM_SUB_PARTS=1, t5     106.4    -37.2%               162.1    178.9
+#1+#2 + EP_MIN_TOKENS_PER_PART=1   171.5    clamp-off control    162.6    178.8
 
 4 nodes / 32 ranks / 12 SM        dispatch  vs its own backend  combine  redComb
-unpatched, type 2                 1001.2    1.00x               343.3    350.7
-#1+#2, type 2                      627.2    -37.4%              335.1    347.8
-unpatched, type 5                  184.5    1.00x               243.6    253.5
-#1+#2, type 5                      169.5    -8.1%               243.7    253.1
-#1+#2 + EP_NUM_SUB_PARTS=1, t5     155.9    -15.5%              243.9    251.7
-#1+#2 + EP_MIN_TOKENS_PER_PART=1   184.1    clamp-off control    243.3    253.1
+unpatched, type 2                 1003.2    1.00x                344.2    357.0
+#1+#2, type 2                      627.4    -37.5%               336.9    346.8
+unpatched, type 5                  184.3    1.00x                244.2    253.3
+#1+#2, type 5                      169.5    -8.0%                243.5    252.9
+#1+#2 + EP_NUM_SUB_PARTS=1, t5     155.9    -15.4%               243.6    251.9
+#1+#2 + EP_MIN_TOKENS_PER_PART=1   184.1    clamp-off control    243.5    252.9
 
 Three things to read off this:
 
-1. The two effects are INDEPENDENT. The clamp is worth -33 to -37% on either
+1. The two effects are INDEPENDENT. The clamp is worth -33 to -38% on either
    backend at 2 nodes and on type 2 at 4 nodes, and the backend is worth 2.2x
    to 5.4x with no code change. Stacked, 2-node decode dispatch goes
    365.1 -> 106.4 us (3.43x).
@@ -235,8 +256,8 @@ Three things to read off this:
    is the evidence that the mechanism is part geometry inside dispatch, not
    the network: EFA is doing the same work either way.
 
-3. The clamp's win COLLAPSES at 4 nodes on type 5 -- -8.1% instead of -33.5%,
-   and the clamp-off control (184.1) is within noise of unpatched (184.5),
+3. The clamp's win COLLAPSES at 4 nodes on type 5 -- -8.0% instead of -33.5%,
+   and the clamp-off control (184.1 us) is within noise of unpatched (184.3),
    confirming it is the clamp that stopped paying rather than something else
    in the PRs. Type-5 4-node decode dispatch has a floor around 156-185 us
    that part geometry does not reach; EP_NUM_SUB_PARTS=1 gets furthest
@@ -245,69 +266,161 @@ Three things to read off this:
 
 Prefill is unaffected by the PRs, as designed:
   2N / 24 SM / 8192   dispatch 1535.7 (official) vs 1536.0 (PRs)
-  4N / 12 SM / 8192   dispatch 3955.3 (official) vs 3955.0 (PRs)
+  4N / 12 SM / 8192   dispatch 3955.3 (official) vs 3955.3 (PRs)
 
 With the PRs applied, 12 SM beats 24 SM for 2-node decode dispatch
 (112.7 vs 145.3 us), reversing TABLE 6's advice for that one case. At 4 nodes
-the two are a tie on dispatch+redComb (422.6 vs 422.4 us).
+the two are a tie on dispatch+redComb (422.4 vs 422.2 us).
 
 
 TABLE 8 -- main is perf-neutral, and the release beats the 08-13 pin
 --------------------------------------------------------------------
 All on type 5.
 
-arm                                    dispatch  cached disp  combine  redComb
-2N/12SM/8192  official ec623f3         1502.9    1591.0       3629.9   4226.0
-2N/12SM/8192  main 8e7b42e             1502.0    1590.8       3590.8   4241.7
-2N/24SM/8192  official ec623f3         1535.7    1620.7       3528.9   3364.3
-2N/24SM/8192  main 8e7b42e             1535.5    1618.9       3521.7   3370.6
-4N/12SM/8192  official ec623f3         3955.3    4239.4       7850.0   7963.6
-4N/12SM/8192  main 8e7b42e             3954.8    4243.7       7821.7   7827.2
-2N/12SM/128   official ec623f3          169.4     165.9        162.7    179.0
-2N/12SM/128   main 8e7b42e              169.9     165.6        162.5    178.9
+arm                                 dispatch  cached d  combine  redComb
+2N/12SM/8192  official ec623f3         1502.9   1591.0   3602.5   4237.9
+2N/12SM/8192  main 8e7b42e             1502.0   1590.8   3599.5   4246.4
+2N/24SM/8192  official ec623f3         1535.7   1620.7   3534.0   3362.6
+2N/24SM/8192  main 8e7b42e             1535.5   1618.9   3527.8   3367.3
+4N/12SM/8192  official ec623f3         3955.3   4239.7   7842.6   7943.2
+4N/12SM/8192  main 8e7b42e             3954.2   4243.7   7812.1   7894.2
+2N/12SM/128   official ec623f3          169.4    165.9    162.7    179.0
+2N/12SM/128   main 8e7b42e              169.9    165.6    162.5    179.0
 
 main tip 8e7b42e = cc55cce + 78ae4e5 (sysfs rate probe) + f297499 (test_ep
 pressure loops) + e3fd436 (64-bit st.bulk operand) + 8e7b42e (single-node GIN
 context count); gin_resource_alloc.cuh is unchanged throughout. Note ec623f3 is
 NOT an ancestor of main: upstream rewrote it as cc55cce, which also changes
 content (buffer.hpp / nccl.cu / combine.hpp / elastic.py, +41/-19). So the
-official-vs-main rows below are an A/B across that rewrite too, not just across
-the 4 commits -- and they still land within 0.1-1.1%, i.e. inside run noise.
+official-vs-main rows above are an A/B across that rewrite too, not just across
+the 4 commits -- and they still land within 0.6%, i.e. inside run noise.
 Take main.
 
 vs the hand-assembled 08-13 pin (7a6059a3, source NCCL + source aws-ofi-nccl,
 --skip-check, GDAKI=1):
 
-arm                              dispatch  cached disp  combine  redComb
-2N/12SM/8192  pin                1515.0    1749.0       3643.4   4164.6
-2N/12SM/8192  official, type 5   1502.9    1591.0       3629.9   4226.0
-2N/12SM/128   pin                 303.9     271.6        176.4    188.8
-2N/12SM/128   official, type 5    169.4     165.9        162.7    179.0
-4N/12SM/8192  pin                3961.0    4710.3       8004.0   8079.6
-4N/12SM/8192  official, type 5   3955.3    4239.4       7850.0   7963.6
-4N/12SM/128   pin                 320.8     284.3        276.1    280.4
-4N/12SM/128   official, type 5    184.5     180.0        243.6    253.5
+arm                                 dispatch  cached d  combine  redComb
+2N/12SM/8192  pin 7a6059a3             1517.0   1749.1   3621.2   4166.2
+2N/12SM/8192  release ec623f3          1502.9   1591.0   3602.5   4237.9
+2N/12SM/128   pin 7a6059a3              301.2    269.5    175.9    188.3
+2N/12SM/128   release ec623f3           169.4    165.9    162.7    179.0
+4N/12SM/8192  pin 7a6059a3             3962.5   4709.2   7993.7   8067.7
+4N/12SM/8192  release ec623f3          3955.3   4239.7   7842.6   7943.2
+4N/12SM/128   pin 7a6059a3              320.9    287.3    277.4    286.1
+4N/12SM/128   release ec623f3           184.3    179.5    244.2    253.3
 
-Prefill dispatch is a tie (0.1-0.8% apart). The packaged path wins CACHED
-dispatch by 9-10% and decode dispatch by 1.74-1.79x. There is no performance
-reason to build the stack from source.
+Prefill dispatch is a tie (0.2-0.9% apart). The packaged path wins CACHED
+dispatch by 9.9-11.1% and decode dispatch by 1.74-1.78x. There is no
+performance reason to build the stack from source.
+
+
+ONE AXIS -- every 2-node prefill arm, 16 ranks / 12 SM / 8192 tok
+-----------------------------------------------------------------
+arm                                        dispatch   SO mean  wire%
+release ec623f3, default env (type 2)      1644.0     74.0     74.0%
+release, --num-allocated-qps 5 (type 2)    1631.1     75.0     75.0%
+pin 7a6059a3, source stack, --skip-check   1517.0     80.6     80.6%
+release, full 5-var route B                1504.4     81.0     81.0%
+release, the type-5 pair                   1502.9     81.2     81.2%
+main 8e7b42e + the type-5 pair             1502.0     81.0     81.0%
+
+The two env vars account for the entire spread: the other three route-B vars
+add nothing on top of them, main is indistinguishable from ec623f3, and the
+hand-built pin does not beat the packaged path.
+
+
+DECODE LATENCY -- 24 SM, type 5, 128 tok
+----------------------------------------
+op                  2N time    4N time
+dispatch            147.3      184.7
+expanded dispatch   146.6      184.0
+cached dispatch     135.8      184.3
+combine             151.9      236.9
+reduced combine     160.1      239.6
+
+2N -> 4N: dispatch +37.4 us (+25%) for double the ranks -- type-5 decode
+dispatch barely notices scale. combine is where 4 nodes hurts (+56%).
+
+
+PREFILL BANDWIDTH -- 24 SM, type 5, 8192 tok
+--------------------------------------------
+time is a mean over all ranks; SO/SU are MIN-MAX ACROSS RANKS.
+
+op                  2N time    SO      SU        4N time    SO      SU
+dispatch            1535.7     79-80   257-263   3972.7     55-56   111-113
+expanded dispatch   1537.3     79-80   258-262   3971.3     55-56   111-113
+cached dispatch     1620.7     75-76   244-249   4256.6     51-52   103-106
+combine             3534.0     62-73   202-239   7710.7     51-57   103-115
+reduced combine     3362.6     64-79   209-259   7728.3     51-57   103-115
+
+dispatch runs at 80-84% of wire at both scales: 2 nodes 79.6% (SO mean 79.6,
+wire% == SO at N=2), 4 nodes 83.7% (SO mean 55.8 x 1.5). 4 nodes is the higher
+of the two because true cross-node bytes per rank go 61.0 -> 165.9 MB (x2.72)
+while time goes only x2.59.
+
+
+SPREAD -- where the SO/SU range comes from, and why it is NOT variance
+----------------------------------------------------------------------
+2 nodes / 24 SM / 8192 tok
+op                  cross-rank spread%: time  bytes   SO      | rep-to-rep spread% of the all-rank mean
+dispatch                               0.5    1.6    1.3      | 0.16%  (reps 1535.5/1537.0/1534.5)
+expanded dispatch                      0.3    1.6    1.3      | 0.10%  (reps 1536.5/1538.0/1537.5)
+cached dispatch                        0.4    1.6    1.3      | 0.31%  (reps 1619.0/1624.0/1619.0)
+combine                               16.1    1.6   16.5      | 0.05%  (reps 3533.2/3535.1/3533.6)
+reduced combine                       20.7    1.6   21.3      | 0.30%  (reps 3366.3/3356.1/3365.5)
+
+4 nodes / 24 SM / 8192 tok
+op                  cross-rank spread%: time  bytes   SO      | rep-to-rep spread% of the all-rank mean
+dispatch                               0.9    1.4    1.8      | 0.06%  (reps 3971.6/3973.8)
+expanded dispatch                      0.9    1.4    1.8      | 0.13%  (reps 3973.8/3968.8)
+cached dispatch                        1.4    1.4    1.9      | 0.02%  (reps 4256.2/4257.0)
+combine                               11.1    1.4   10.9      | 0.08%  (reps 7713.8/7707.6)
+reduced combine                       11.8    1.4   10.9      | 0.31%  (reps 7740.2/7716.3)
+
+Four things explain every range printed above, in order of size:
+
+1. For dispatch the range is the DENOMINATOR, not the time. Each rank routes a
+   different number of tokens (test_ep.py's get_unbalanced_scores), so its byte
+   count varies 1.4-1.6% across ranks, and GB/s = that rank's bytes / that
+   rank's time inherits it.
+2. INTEGER PRINTING FLOOR. test_ep.py prints GB/s with :.0f. One unit is 1.26%
+   of SO at 2N (SO mean 79.6) and 1.79% at 4N (SO mean 55.8), so `79-80` and
+   `55-56` are two adjacent integers -- the narrowest range the format can
+   express. Nothing sub-1% is visible in these columns at all.
+3. Only combine / reduced combine are genuinely spread (16-21% at 2N), and
+   there the driver IS time, not bytes. That is the per-node layering below,
+   not jitter.
+4. REP-TO-REP REPRODUCIBILITY IS 0.02-0.31% on every op including combine
+   (right-hand column). The tables' us values are stable to the third digit;
+   the SO/SU ranges are a cross-rank snapshot and say nothing about
+   reproducibility.
 
 
 NODE LAYERING -- why every number here is an all-rank mean
 ----------------------------------------------------------
-dispatch is uniform across ranks (2N/24SM/8192: all 16 ranks within 1531-1538
-us). combine and reduced combine are NOT: they split cleanly by machine.
+dispatch is uniform across ranks and across machines. combine and reduced
+combine are NOT: they split cleanly by machine.
 
-2N / 24 SM / 8192, one run, mean over each node's 8 ranks:
+2N / 24 SM / 8192, pooled over 3 reps, mean over each node's 8 ranks:
                  node1              node2
-  dispatch       1536.0             1535.0     (0.1% apart)
-  combine        3302.9             3763.9     (14% apart)
-  redComb        3091.7             3653.9     (18% apart)
+  dispatch       1535.0             1536.3     (0.1% apart)
+  combine        3300.3             3767.7     (13.2% apart)
+  redComb        3074.9             3650.3     (17.1% apart)
 
-Which machine is the slow one flips between runs. A per-node mean of combine
-therefore lands at either ~3100 or ~3670 us depending on which log you read,
-which looks like bistable behaviour and is not: pooled over all 16 ranks the
-three 24 SM reps agree to 1.7% (3391.5 / 3335.7 / 3365.5). Report all ranks.
+4N / 24 SM / 8192, pooled over 2 reps:
+  dispatch       3991.5  3986.7  3955.9  3956.6   (0.9% spread)
+  combine        7862.5  7641.1  7541.1  7798.1   (4.2% spread)
+  redComb        7862.8  7647.6  7549.3  7853.4   (4.1% spread)
+
+Which machine is the slow one is fixed WITHIN a round of consecutive reps and
+flips BETWEEN rounds -- it is a per-launch property, not per-iteration noise.
+All three official 24 SM reps put node2 slow (3764 / 3771 / 3769 us combine vs
+3303 / 3299 / 3299); both main 24 SM reps and both pin reps put the other one
+slow. The magnitude is stable across all of them at 14-18%. That is why
+pooling reps does NOT flatten the 2-node layering, and why the 4-node figure
+looks small: at 4 nodes the slow machine differs between the two reps (node4
+in rep1 at 8087 us, node1 in rep2 at 8117 us), so pooling averages it away.
+Report all ranks, and never a single node's mean of combine.
 
 
 MECHANISM -- why the pair, and how to confirm which backend ran
@@ -355,6 +468,12 @@ EP_BUFFER_DEBUG   csrc/elastic/buffer.hpp:1151 builds a stringstream and
                   its cost from the type-2 arm's own run-to-run spread (dbg off:
                   359.2 / 371.1 us; dbg on: 327.2 / 373.5 us at 2N/12SM/128tok),
                   so no number is claimed. It is off in every table here.
+glued log lines   ranks write concurrently to one stdout, so two per-rank
+                  records regularly land on one physical line. A parser using
+                  re.search per line silently keeps the first and drops the
+                  second -- 82 of 91 run tags in logs/ are affected. Use
+                  finditer (make_tables.py and parse_ep.py both do) and check
+                  the COMPLETENESS AUDIT block for n=16/32 on every op.
 one-node means    see NODE LAYERING.
 JIT cache         one EP_JIT_CACHE_DIR per arm. GIN device headers get compiled
                   into DeepEP's JIT kernels, so a shared cache serves the other
@@ -378,4 +497,8 @@ REPRODUCE
 
 logs/ holds every run behind these tables, named
 <image>_<N>N_<sm>sm_<tok>tok_<qp>_<flags>_<rep>.node<n>.log, one file per node.
-Aggregate them with the all-rank mean, not a single node's.
+
+  python3 make_tables.py          # regenerates every table above from logs/
+  EPRUNS=./logs python3 parse_ep.py <tag>   # one run tag, per-op detail
+
+Aggregate with the all-rank mean, not a single node's.
