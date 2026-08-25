@@ -1,0 +1,382 @@
+DeepEP-v2 on EFA / p5en.48xlarge -- 2-node and 4-node campaign, 2026-08-25
+==========================================================================
+
+HEADLINE
+--------
+The 8-10% prefill-dispatch gap and a 2.1x decode gap between our published
+2026-08-13 numbers and the released `ec623f3` image are NOT a code difference.
+They are a *GIN backend selection* difference, controlled by two env vars:
+
+    NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0
+
+With the packaged EFA installer 1.50.0 stack, `libnccl-net-ofi.so` registers
+TWO GIN plugins -- a Libfabric proxy-assisted one (type 2) and Libfabric_GDAKI
+(type 5). Both are loaded; NCCL picks type 2 by default. Forcing type 5 gives:
+
+    2N / 12 SM / 8192 tok  dispatch  1655 us -> 1500.2 us   (74.0 -> 81.5 GB/s SO)
+    2N / 12 SM /  128 tok  dispatch   352.0 us ->  168.9 us  (2.08x)
+
+This RETRACTS the claim in docs/runbook_zh.md ~L424 that after installer 1.50.0
+none of the "route B" env vars are needed. They are not needed for GDAKI to
+*load*, but they ARE needed for it to be *used*.
+
+
+PROVENANCE
+----------
+Hardware      4 x p5en.48xlarge (H200 x8, 16 x EFA @200 Gb/s = 50 GB/s per GPU)
+              us-east-2, private IPs 172.31.20.74 / .24.247 / .19.157 / .18.125
+EFA stack     aws-efa-installer 1.50.0 (production tarball, md5
+              e5a5178944b1f1112f3b2eb3b15ca5a7), efa.ko 3.3.0g, host-side
+NCCL          2.31.2+cuda13.3 (in-image), ofi plugin /opt/amazon/ofi-nccl
+Fabric        "Selected provider is efa, fabric is efa-direct" (both arms)
+
+Images
+  pin       deepep-v2-efa-gdaki-h200:dev-7a6059a3   (2026-08-12 build, the
+            calibration pin behind results/p5en_ours_20260813; launched with
+            GDAKI=1 which already sets the full route-B env)
+  official  deepep-v2-efa-official:dev              DEEPEP_COMMIT=ec623f3
+  main      deepep-v2-efa-official:main-8e7b42e     DEEPEP_COMMIT=8e7b42e
+            (amazon-contributing/DeepEP main tip, 2026-08-24)
+  prs       deepep-v2-efa-official:pr1pr2-b097b03   DEEPEP_COMMIT=b097b03
+            = PR #2 head; PR #1 (5118c2e) is an ancestor, so this ONE sha is the
+            "#1 + #2 stacked" arm. Both PR heads live in whn09/DeepEP but are
+            fetchable from amazon-contributing/DeepEP, so the Dockerfile needs no
+            change beyond --build-arg. base of both PRs = 8e7b42e.
+  Both official/main images built independently on all 4 nodes, BUILD_RC=0,
+  `import deep_ep` -> 2.1.0.
+
+Test command (all arms; the pin launcher forwards only --num-processes/--num-sms
+so the shape args must be spelled out or test_ep.py silently runs 4096 tok/topk 6)
+  python3 -u tests/elastic/test_ep.py --num-processes=8 --num-tokens=$TOK
+    --hidden=7168 --num-topk=8 --num-experts=256 --num-sms=$SM
+    --allow-hybrid-mode=1 --prefer-overlap-with-compute=0 --test-first-only
+  Kernel variant printed by every run: "DeepEP hybrid kernel selection: unordered".
+  EP_BUFFER_DEBUG is OFF in every number below (see CONFOUNDS).
+
+
+DENOMINATORS  (state these with every rate; a GB/s alone has flipped a
+              conclusion before)
+--------------------------------------------------------------------------
+us            the per-op mean of the 8 local-rank lines on node1, as printed.
+              Ranges in [ ] are min-max across those 8 ranks.
+SO GB/s       scale-out bytes / time, as printed by test_ep.py. WITHOUT
+              --ignore-local-traffic this includes intra-node traffic, so it is
+              NOT a wire rate.
+wire %        SO * (N-1)/N / 50 GB/s.  N=2 -> wire% is numerically equal to SO.
+              N=4 -> wire% = SO * 1.5.
+bytes/rank    8192 tok: dispatch 399.2 MB @2N, 444.0 MB @4N; combine 765.9 MB
+              @2N, 851.9 MB @4N.   128 tok: dispatch 5.8 MB @2N, 6.0 MB @4N;
+              combine 11.1 MB @2N.
+
+
+TABLE 1 -- 2 nodes / 16 ranks / 12 SM / 8192 tok (prefill)
+----------------------------------------------------------
+arm                              dispatch us   SO GB/s  wire%   log
+pin 7a6059a3 (route B, skipchk)  1513.9        80.6     80.6    pin_2N_12sm_8192tok_*
+  "                        rep2  1523.9        80.6     80.6
+  [published 2026-08-13: 1504 us / 81.25 GB/s -- reproduced]
+official, default env            1648-1663     74.0     74.0    official_2N_12sm_8192tok_qpdefault_nodbg_rep*
+official, --num-allocated-qps 5  1631/1633/1637 75.0     75.0    official_2N_12sm_8192tok_qps5_*
+official, GIN_TYPE=5 + SYMGIN=0  1500.2        81.5     81.5    official_2N_12sm_8192tok_qpdefault_nodbg_gin5_rep2
+official, full 5-var route B     1505.0        81.0     81.0    official_2N_12sm_8192tok_qpdefault_nodbg_routeB_rep1
+main 8e7b42e, GIN_TYPE=5+SYM=0   1501.0/1502.0 81.0     81.0    main_2N_12sm_8192tok_qpdefault_nodbg_gin5_rep*
+
+  => The released code AT type 5 is slightly FASTER than the 08-13 pin
+     (1500.2 vs 1513.9 us). The three extra route-B vars beyond the pair are
+     free but useless.
+
+
+TABLE 2 -- 2 nodes / 16 ranks / 12 SM / 128 tok (decode), dispatch
+------------------------------------------------------------------
+Single-variable teardown from the official default env. Each row changes exactly
+ONE thing relative to "default".
+arm                                          dispatch us
+default (type 2)                             352.0 / 357.5
++ FI_EFA_USE_HW_CNTR=1                       369.5      (worse)
++ NCCL_RMA_DISABLE=1                         363.2      (worse)
++ OFI_NCCL_GIN_STRONG_SIGNAL=1               371.1      (worse)
++ NCCL_SYM_GIN_KERNELS_ENABLE=0              327.9      (-7%, but still type 2)
++ NCCL_GIN_TYPE=5                            *** CRASH *** see MECHANISM
++ NCCL_GIN_TYPE=5, NCCL_RMA_DISABLE=1        *** CRASH ***
++ NCCL_GIN_TYPE=5 + SYM_GIN_KERNELS=0        168.9 / 169.1     <-- 2.08x
+full 5-var route B                           169.9 / 167.2
+main 8e7b42e + the pair                      169.7 / 169.8
+pin 7a6059a3 (route B)                       300.5 / 300.5
+
+  combine  177 -> 164.3 us,  reduced combine  195 -> 181.0 us (same switch).
+  => At decode the released code on type 5 (168.9) beats the 08-13 pin (300.5)
+     by 1.78x. The pin is only "fast" relative to type-2 official.
+
+
+MECHANISM (from NCCL_DEBUG=INFO, logs/gin_plugin_selection_*.grep.txt)
+----------------------------------------------------------------------
+Both arms print:
+    GIN/Plugin: Loaded gin plugin Libfabric_GDAKI (v14)
+    GIN/Plugin: Successfully loaded external plugin .../libnccl-net-ofi.so
+The type-5 arm additionally prints:
+    GIN/Plugin: Skipping plugin Libfabric index 3 type 2: NCCL_GIN_TYPE=5 requested
+i.e. a *second*, type-2 Libfabric GIN plugin exists at plugin index 3 and is
+what the default env selects, even though GDAKI loaded fine.
+
+Why NCCL_GIN_TYPE=5 ALONE crashes -- the log names the reason:
+    gin/gin_host.cc:229 (ncclGinValidateSignalRequest)
+      NCCL WARN GIN strong signals are required, but the GIN plugin does not
+      support them.
+    gin/gin_host.cc:440 (ncclGinDevCommSetup)
+      NCCL WARN GIN: DevComm setup failed on all available backends
+  -> RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:217): 3
+The symmetric-memory GIN kernels (NCCL_SYM_GIN_KERNELS_ENABLE, default 1)
+require strong signals; GDAKI does not implement them. With type 2 still in the
+candidate list NCCL silently falls back to it; once type 2 is excluded there is
+no backend left. Hence the pair is minimal and sufficient: exclude type 2 AND
+drop the strong-signal requirement.
+
+CORRECTION to an earlier reading of these logs: the `[Proxy Progress] Device N
+CPU core M` lines are NOT a discriminator -- both arms spawn 16 of them (NCCL
+creates proxy threads for ordinary collectives regardless of the GIN backend).
+The "Skipping plugin ... type 2" line and the strong-signal WARN are the
+evidence; the proxy-thread count is not.
+
+Context counts printed by the type-5 arm:
+    devCommCreate: creating 11 contexts   (kDefaultGinContextCnt)
+    devCommCreate: creating 4 contexts
+
+
+TABLE 3 -- the --num-allocated-qps 5 A/B (the docs' pending one-flag test)
+--------------------------------------------------------------------------
+The flag works at ec623f3: the header goes from `#QPs: 11/11` to `#QPs: 5/5`.
+Its effect is small and does NOT explain the gap:
+  2N, type 2, 8192: dispatch 1660 -> 1632 us  (-1.7%)
+  2N, type 5, 8192: dispatch 1500 -> 1508 us  (nil)
+                    cached dispatch 1591 -> 1741 us  (WORSE by 9.4%)
+                    combine        3895 -> 3308.9 us (BETTER by 15%)
+  4N, type 2, 8192: dispatch 4356 -> 4578 us  (WORSE by 5.1%; sign flips with N)
+  => The QP layout governs *cached* dispatch and combine, not plain dispatch.
+     The published "the 10.7% prefill gap is the GIN QP layout" conclusion is
+     superseded: at most ~20% of the type-2-arm gap, and none of it once both
+     arms are on type 5.
+
+
+TABLE 4 -- 2N num_sms scan, official + type 5 (all #QPs 11/11)
+---------------------------------------------------------------
+8192 tok (prefill), us:
+ SM   dispatch   combine   reduced combine   dispatch+redComb
+  6     2263.0    6062.0        7384.5            9647.5
+ 12     1500.2    3895.2        4425.1            5925.3
+ 16     1512.0    3477.0        3841.7            5353.7
+ 24     1536.0    3302.9        3091.7            4627.7
+ 24r2   1538.0    3299.4        3068.6            4606.6
+ 32     1576.0    3371.9        3639.8            5215.8
+
+128 tok (decode), us:
+ SM   dispatch   combine   reduced combine
+ 12      168.9     164.3        181.0
+ 24      147.8     154.5        162.4
+
+  => 24 SM is the operating point, not the documented 12. It costs 36 us of
+     dispatch (1500 -> 1536, -2.4%) and buys 1334-1357 us of reduced combine
+     (4425 -> 3069..3092, -30%); layer total -22%. At 128 tok 24 SM wins
+     outright: dispatch -12.5%, reduced combine -10%.
+  => 6 SM (the kit's "known-good for 4 nodes") is catastrophic at 2N: +51% on
+     dispatch and +67% on reduced combine vs 12 SM.
+
+main 8e7b42e at 24 SM: dispatch 1534.0 (== official 1536.0) but combine 3782.7
+and reduced combine 3668.0 vs official's 3302.9 / 3091.7. combine variance is
+high at 24 SM (official rank spread 3221-3750), so this needs a replicate before
+being called a regression.
+
+
+TABLE 5 -- 4 nodes / 32 ranks (type-2 default env -- see CAVEAT)
+----------------------------------------------------------------
+These were taken BEFORE the type-5 finding, at the default env, and are kept
+because they settle the num_sms operating point at 4N:
+arm                     tok    SM   dispatch us      SO GB/s  wire%
+official default       8192     6   5360.0            41.0    61.5
+official default       8192    12   4356 / 4339       51.0    76.5
+official qps5          8192    12   4578.0            48.x     -
+pin 7a6059a3           8192    12   3983.6 / 3961.4   56.0    84.0
+official default        128    12   781.7 / 1114 / 1054.8 / 1088  (bimodal)
+official default        128    12   965.9  (nodbg)
+official default        128     6   842.5
+main 8e7b42e            128    12   1045.0
+pin 7a6059a3            128    12   319.4 / 318.7   (2N was 300.5 -- nearly
+                                     node-count invariant)
+  => 12 SM is 18.7% better than 6 SM at 4N and does not hang. The kit's
+     "Known-good: 12 on 2 nodes, 6 on 4 nodes" is wrong on the 4-node half.
+  => 4N/type-2 decode is bimodal (782-1114 us); 2N/type-2 was not. Re-measured
+     at type 5 in TABLE 6.
+
+CAVEAT: the first attempt at a 4N type-5 batch produced NO data -- another
+workload held ~109 GB/GPU on node3 and the run_test_ep.sh preflight refused
+("REFUSING TO START: 109022 MiB already in use on the busiest GPU"). That is the
+preflight doing its job: a refusal instead of a silently ~2x-inflated number.
+The 2N numbers above are uncontaminated -- the foreign containers started
+03:36:09/03:36:12 (node1/2) and route-B decode measured 170.4 us before 03:36
+and 169.9/169.1/169.7 after.
+
+
+TABLE 6 -- 4 nodes / 32 ranks, official/main + type 5  (#QPs 11/11 everywhere)
+------------------------------------------------------------------------------
+8192 tok (prefill), us:
+ arm            SM   dispatch   SO GB/s  wire%   combine   redComb
+ official        6    4049.8     55.0     82.5    9796.9    9039.6
+ official       12    3974.0     56.0     84.0    7667.9    9003.4
+ official  12 rep2    3970.0     56.0     84.0    8620.6    7553.6
+ official  12 rep3    3967.0     56.0     84.0    8632.6    7793.1
+ official       24    3991.0     55.6     83.4    7608.1    7588.1
+ official  24 rep2    3992.0     55.7     83.6    8110.7    8143.7
+ main 8e7b42e   12    3975.0     56.0     84.0    8619.4    8917.8
+ [pin 7a6059a3  12    3983.6 / 3961.4, 56.0, 84.0 -- from TABLE 5]
+
+ dispatch is extremely reproducible (12 SM: 3974.0/3970.0/3967.0, a 0.18% spread).
+ combine and reduced combine are NOT: at 12 SM reduced combine spans 7553.6-9003.4
+ over three reps (19%), at 24 SM 7588.1-8143.7 over two (7%).
+
+128 tok (decode), us:
+ arm            SM   dispatch   combine   redComb
+ official        6     179.6     283.2     296.1
+ official       12     185.5     233.1     243.5
+ official       24     185.5     219.0     221.2
+ main 8e7b42e   12     184.6     232.2     242.8
+
+=> type 5 closes the 4-node gap exactly as it does at 2 nodes:
+     prefill dispatch  4356 (type 2) -> 3974 us   (-8.8%), 51.0 -> 56.0 GB/s
+     decode  dispatch  782-1114      ->  185.5 us (4.2x-6.0x)
+   and it REMOVES the 4N decode bimodality: the type-2 arm ranged 782-1114 us
+   across runs, the type-5 arm's 8 ranks span 185-186 us.
+
+=> 4N decode is nearly node-count invariant on type 5: 168.9 us @2N ->
+   185.5 us @4N, i.e. +16.6 us for doubling the node count. The 08-13 pin's
+   "node-count invariant" 319.4 us is beaten by 1.72x.
+
+=> num_sms at 4N behaves DIFFERENTLY from 2N once on type 5 -- and unlike 2N,
+   there is NO clear winner. Do not claim one.
+   - prefill dispatch is flat from 6 to 24 SM (4049.8 / 3970.3 mean / 3991.5
+     mean, a 2.0% spread) and 12 SM is nominally best. The 23% penalty 6 SM
+     showed at type 2 (5360 vs 4356) was a type-2 artifact, not an SM effect.
+   - prefill combine/reduced combine slightly favour 24 SM on the means
+     (combine 8307 @12 vs 7859 @24; redComb 8117 @12 vs 7866 @24) but the
+     distributions overlap heavily -- 12 SM redComb spans 7553.6-9003.4 and
+     24 SM spans 7588.1-8143.7. With 3 and 2 reps that is not a result.
+     CORRECTION: an earlier read of this file called 12 SM "bimodal" and 24 SM
+     "stable" from one rep each. The third 12 SM rep (7793.1) and the second
+     24 SM rep (8143.7) remove that distinction; both are noisy at 4N.
+   - decode: dispatch is identical at 12 and 24 SM (185.5 both) and slightly
+     better at 6 (179.6), but combine and reduced combine clearly want 24 SM
+     (combine 283.2 / 233.1 / 219.0 and redComb 296.1 / 243.5 / 221.2 at
+     6 / 12 / 24 SM). 24 SM is the pick for decode at 4N: -9.4% reduced combine
+     vs 12 SM at equal dispatch.
+
+=> main 8e7b42e == official ec623f3 at 4N too: dispatch 3975.0 vs 3974.0
+   (prefill), 184.6 vs 185.5 (decode).
+
+ONE REPLICATED main-vs-official DIFFERENCE: 2N / 24 SM / 8192 tok `combine`
+  official  3302.9 / 3299.4 / 3298.6 us   (3 reps, per-rank spread 3220-3747)
+  main      3782.7 / 3792.3 us            (2 reps, per-rank spread 3777-3812)
+`reduced combine` is identical (official 3091.7/3068.6/3077.4, main 3668.0 then
+3089.1 -- the 3668.0 was the outlier) and dispatch is identical (1536/1538/1531
+vs 1534/1535). So this is combine-only and it replicated on both sides, but
+official's distribution has a long upper tail that reaches into main's range, so
+call it "unexplained, needs more reps", not a regression.
+
+RECOMMENDED OPERATING POINTS (this code, this EFA stack)
+  always:  NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0
+  2 nodes: --num-sms 24   (not the documented 12: layer total -22% at 8192 tok,
+                           and better on every op at 128 tok)
+  4 nodes: 12 SM for prefill (best dispatch, 3970.3 mean, and combine is too
+           noisy to distinguish), 24 SM for decode (equal dispatch, -9.4%
+           reduced combine). NOT 6 SM either way. If you want one number for
+           both, 24 SM costs 0.5% of prefill dispatch.
+
+
+TABLE 7 -- do PRs #1+#2 still pay on the type-5 backend? YES, they STACK
+------------------------------------------------------------------------
+The type-5 switch alone (168.9 us) lands in the same ballpark as the published
+"#1+#2" number (166.1 us, measured on type 2), so the two could have been the
+same win. They are not. Image `deepep-v2-efa-official:pr1pr2-b097b03` =
+amazon-contributing/DeepEP PR #2 head `b097b03`, which HAS PR #1 (`5118c2e`) as an
+ancestor -- so one SHA is the stacked arm, and it is fetchable from the base repo
+even though the head lives in `whn09/DeepEP`. Verified in-image:
+`csrc/jit/compiler.hpp:80-81` forwards the four env vars and
+`hybrid_dispatch_unordered.cuh:67` has `EP_MIN_TOKENS_PER_PART 15`.
+
+2N / 16 ranks / 12 SM / 128 tok, dispatch us (arms interleaved, no EP_BUFFER_DEBUG):
+ code                        GIN backend   dispatch      vs unpatched/type2
+ ec623f3 unpatched           type 2        352.0 / 357.5     1.00x
+ ec623f3 unpatched           type 5        168.9 / 169.1     2.08x
+ #1+#2 defaults              type 2        243.9 / 248.4     1.44x
+ #1+#2 defaults              type 5        113.5 / 112.8     3.10x
+ #1+#2, EP_MIN_TOKENS_PER_PART=1  type 5   173.3             (clamp off control)
+ #1+#2, EP_NUM_SUB_PARTS=1        type 5   106.6             3.30x   <-- best
+ #1+#2 defaults              type 5, 24 SM 147.2             (12 SM is better here)
+
+  => The clamp's RELATIVE effect is preserved almost exactly across backends:
+     on type 2 it is 352.0 -> 243.9 (-30.7%), on type 5 173.3 -> 113.1 (-34.7%).
+     So the part-geometry problem and the backend problem are independent, and
+     the PR case is strengthened, not undermined.
+  => Best measured decode dispatch on this hardware: 106.6 us
+     (#1 + #2 + EP_NUM_SUB_PARTS=1 + type 5), 3.30x the released default.
+     combine 164.2 us and reduced combine 180.9 us are unchanged by the PRs, as
+     documented -- the win is dispatch-only.
+  => `EP_MIN_TOKENS_PER_PART=1` is a *third* geometry, not a clean control: 173.3
+     vs unpatched type-5's 168.9 (2.6% apart), exactly as the PR notes warn.
+  => With the PRs applied, 12 SM beats 24 SM at decode (113.5 vs 147.2), i.e.
+     the "24 SM for 2N decode" advice in TABLE 4 applies to UNPATCHED code only.
+
+Prefill sanity (the PRs are supposed to be within +-2% on prefill):
+ 2N / 24 SM / 8192 tok dispatch  1534.0 us vs official 1531 / 1536 / 1538 -- flat. OK.
+
+
+UNEXPLAINED, NEEDS MORE REPS: reduced combine at 2N / 24 SM / 8192 tok is bistable
+ official ec623f3   3091.7 / 3068.6 / 3077.4 us   (per-rank spread 2985-3656)
+ main 8e7b42e       3668.0 / 3089.1 us
+ #1+#2 b097b03      3673.2 us                     (per-rank spread 3659-3681)
+Two clusters, ~3080 and ~3670. official hit the low one 3/3, the two 8e7b42e-based
+images hit the high one 2/3 -- but main also hit the low one once, so this is not
+cleanly a code difference. Note the shape differs: official's low runs have ONE
+slow node dragging the max to 3656 while all 8 ranks of the high runs sit at
+3659-3681. Do not report this as a regression on the strength of these reps.
+
+
+CONFOUNDS FOUND AND ELIMINATED
+------------------------------
+1. EP_BUFFER_DEBUG=1 is inside the timed region. csrc/elastic/buffer.hpp:1151
+   builds a stringstream and printfs "CPU side received count" from inside
+   dispatch's host polling loop. Measured cost: +0.7% at 8192 tok but +6-9% at
+   128 tok (352.0 -> 371-385). The b200/pin launcher does not forward it, so pin
+   arms were clean while official arms were penalized -- a real cross-arm
+   confound. Every number in this file was taken with it OFF; the flag is now
+   documented as debug-only in run_test_ep.sh.
+2. First pin run silently used test_ep.py defaults (4096 tok / topk 6) because
+   the b200 launcher forwards only --num-processes/--num-sms. Caught by diffing
+   the `Config:` header against results/p5en_ours_20260813/repro_2n_sms12.P5-1.log
+   (158 MB / 857 us vs 399.8 MB / 1504 us). Always diff the Config block.
+3. Four teardown runs overwrote each other because `tr '=' ''` errors on macOS
+   ("tr: empty string2"), collapsing every tag to the same name. Redone with
+   explicit tag pairs. Stamp every distinguishing variable into the filename.
+
+
+WHAT DID NOT MATTER
+-------------------
+- amazon/main tip 8e7b42e vs released ec623f3: performance-neutral at 2N for
+  both prefill (1501.0/1502.0 vs 1500.2) and decode (169.7/169.8 vs 168.9).
+  main = ec623f3 + 78ae4e5 (sysfs rate probe, drops the explicit --num-sms
+  requirement) + f297499 (tests) + e3fd436 (st.bulk 64-bit size) + 8e7b42e
+  (single-node GIN ctx). gin_resource_alloc.cuh is unchanged.
+- FI_EFA_USE_HW_CNTR=1, NCCL_RMA_DISABLE=1, OFI_NCCL_GIN_STRONG_SIGNAL=1: all
+  neutral-to-worse on top of the type-5 pair.
+- 7a6059a3 is not an ancestor of origin/dev (tip 4cb39fb); its content was
+  rebased in as 1273c06 / 18167cd / a0a5596.
+
+
+REPRODUCE
+---------
+  # on each node i (rank i-1):
+  cd ~/work/deepep-v2-efa-official
+  IMAGE=deepep-v2-efa-official:dev WORLD_SIZE=2 NUM_SMS=24 TOKENS=8192 \
+  MASTER_PORT=29701 \
+  EXTRA_ENV="NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0" \
+    bash run_test_ep.sh <rank> <leader-private-ip>
+  # EXTRA_ENV is the knob added to run_test_ep.sh for exactly this A/B.
+  # Use a DIFFERENT MASTER_PORT per repetition: a killed run leaves a TCPStore
+  # listener behind and the next one wedges in rendezvous.

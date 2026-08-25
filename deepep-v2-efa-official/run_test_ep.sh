@@ -25,7 +25,15 @@
 #   IGNORE_LOCAL=1   pass --ignore-local-traffic, so the reported scale-out GB/s
 #                    is a wire rate. WITHOUT it, SO includes intra-node traffic
 #                    and can exceed p5en's 50 GB/s per-GPU wire.
-#   IMAGE, WORLD_SIZE, NUM_PROCESSES, EP_NIC_NAME, NCCL_DEBUG, EP_BUFFER_DEBUG
+#   EP_BUFFER_DEBUG=1
+#                    prints the GIN layout line -- but it ALSO printf()s a
+#                    per-call "CPU side received count" from inside dispatch's
+#                    host polling loop (`csrc/elastic/buffer.hpp:1151`), i.e.
+#                    inside the timed region. Measured 2026-08-25 on 2x p5en:
+#                    +0.7% on 8192-tok dispatch but +6-9% on 128-tok dispatch
+#                    (352.0 -> 371-385 us). Use it to confirm the layout, then
+#                    turn it OFF for any number you intend to publish.
+#   IMAGE, WORLD_SIZE, NUM_PROCESSES, EP_NIC_NAME, NCCL_DEBUG, EXTRA_ENV
 set -euo pipefail
 
 NODE_RANK="${1:?node rank (0=leader, 1=worker)}"
@@ -73,6 +81,12 @@ if [ -z "${EP_NIC_NAME:-}" ]; then
   [ -n "$best" ] && EP_NIC_NAME="$best" && echo "=== EP_NIC_NAME=$best (auto, ${best_rate} Gb/s) ==="
 fi
 
+# EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms (e.g. the pre-1.50.0
+# route-B vars OFI_NCCL_GIN_STRONG_SIGNAL=1 / NCCL_GIN_TYPE=5). Deliberately NOT a
+# default: with the packaged 1.50.0 stack GDAKI loads without any of them.
+EXTRA_ENV_ARGS=""
+for kv in ${EXTRA_ENV:-}; do EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS -e $kv"; done
+
 set -x
 docker run --rm \
   --gpus all --privileged --network=host --ipc=host \
@@ -89,6 +103,7 @@ docker run --rm \
   ${EP_MIN_TOKENS_PER_PART:+-e EP_MIN_TOKENS_PER_PART=$EP_MIN_TOKENS_PER_PART} \
   ${EP_NUM_SUB_PARTS:+-e EP_NUM_SUB_PARTS=$EP_NUM_SUB_PARTS} \
   ${EP_JIT_CACHE_DIR:+-e EP_JIT_CACHE_DIR=$EP_JIT_CACHE_DIR} \
+  ${EXTRA_ENV_ARGS} \
   -e PYTHONUNBUFFERED=1 \
   -e PYTHONFAULTHANDLER=1 \
   "${IMAGE}" \

@@ -229,7 +229,31 @@ ZeroDivisionError: float division by zero
 > ec623f3..7a6059a3` 可见），所以我们这个 pin 仍然必须显式给 `--num-sms`；换到 `main` 之后
 > 自动探测就能用了。
 
-**而且 `--num-sms` 不是自由参数。** 它会连带改实际分配的 QP 数，且**非单调**（实测 0→17 QP、12→5、24→10），落到 `num_qps < num_ranks` 的档位会**直接挂死**（GIN auto-tuner 打完那几行就再无输出，600 s 超时）。本文 16 rank / 12 SM 这档是好的（`num_qp=11`）。要和别人对比就固定在官方那三个工作点：**H200 2 节点 12 SM / H200 4 节点 6 SM / B200 2 节点 12 SM**。
+**而且 `--num-sms` 不是自由参数。** 它会连带改实际分配的 QP 数，且**非单调**（实测 0→17 QP、12→5、24→10），落到 `num_qps < num_ranks` 的档位会**直接挂死**（GIN auto-tuner 打完那几行就再无输出，600 s 超时）。本文 16 rank / 12 SM 这档是好的（`num_qp=11`）。要和 AWS 发布的行对比就固定在他们那三个工作点：**H200 2 节点 12 SM / H200 4 节点 6 SM / B200 2 节点 12 SM**。
+
+> ⚠️ **2026-08-25 更正 —— 但那三个不是这份代码上最快的点，用 24 SM。**
+> 实测 4 × p5en，全部在 GIN type 5 上，`--test-first-only`，未开 `EP_BUFFER_DEBUG`
+> （完整数据见 [`results/p5en_2n4n_20260825/summary.txt`](../results/p5en_2n4n_20260825/summary.txt) TABLE 4/6）：
+>
+> | | 2 节点 dispatch | 2 节点 reduced combine | 2 节点合计 | 4 节点 dispatch | 4 节点 reduced combine |
+> |---|---|---|---|---|---|
+> | 6 SM | 2263.0 µs | 7384.5 µs | 9647.5 µs | 4049.8 µs | 9039.6 µs |
+> | 12 SM | 1500.2 µs | 4425.1 µs | 5925.3 µs | **3970.3 µs**（3 轮） | 8116.7 µs（7554–9003） |
+> | **24 SM** | 1536.0 µs | **3091.7 µs** | **4627.7 µs** | 3991.5 µs（2 轮） | 7865.9 µs（7588–8144） |
+> | 32 SM | 1576.0 µs | 3639.8 µs | 5215.8 µs | — | — |
+>
+> - **2 节点：用 24 SM。** 拿 36 µs 的 dispatch（+2.4%）换 1333 µs 的 reduced combine（**−30%**），
+>   层总时间 5925 → 4628 µs（**−22%**）。128 tok 下 24 SM 是全面更优：dispatch
+>   147.8 vs 168.9 µs、combine 154.5 vs 164.3、reduced combine 162.4 vs 181.0。
+> - **4 节点 prefill 没有明显赢家，别下结论。** dispatch 从 6 到 24 SM 基本平（散布 2.0%）
+>   而且极其可复现（12 SM 三轮 3974.0 / 3970.0 / 3967.0，散布 0.18%）；reduced combine
+>   均值上 24 SM 略好，但两档跨轮分布重叠严重（12 SM 跨 7554–9003，24 SM 跨 7588–8144），
+>   3 轮 / 2 轮撑不起结论。所以 4 节点 prefill 就按 dispatch 选 12 SM。
+> - **4 节点 decode 用 24 SM**：dispatch 和 12 SM 完全一样（都 185.5 µs），
+>   reduced combine 243.5 → 221.2 µs（**−9.4%**）、combine 233.1 → 219.0 µs。
+> - **原来写的"4 节点用 6 SM"是错的**：在 type-2 默认下它比 12 SM 差 18.7%（5360 vs 4356 µs），
+>   而且**并不挂死**；换到 type 5 之后 6 SM 那 23% 的 dispatch 惩罚完全消失 —— 所以那是
+>   type-2 的假象，不是真的 SM 效应。
 
 ### 4.3 日志里必须出现的 GIN 证据
 
@@ -297,7 +321,19 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 慢的那一侧整 8 个 rank 的 combine 都慢约 700 µs（**+21%**），reduced combine 慢约 8%；dispatch 没有这个分层。
 **所以别只引一台机器的区间。** 哪台慢在不同次运行里是反过来的，单跑分不出是不是 master 节点的固有效应，这里不下机制结论。
 
-> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%；同一个 kernel，差的是 GIN QP 布局）**
+> ⚠️ **2026-08-25 撤回 —— 这 10.7% 是 GIN *后端* 选择，不是 QP 布局。**
+> 下面这段和 §5.3 的源码分析保留：blob 级"同一个 kernel"的结论仍然成立，QP 布局那套算术
+> 也仍然对；错的是**因果归因**。同机实测：`--num-allocated-qps 5` 确实把布局改成
+> `5 / 49 / 5`（证明这个 flag 在 `ec623f3` 上生效），但 plain dispatch 只从
+> **1660 → 1632 µs（−1.7%）**，最多解释这个 gap 的 ~20%。而只加
+> `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0`（**一行代码都不改**）就到
+> **1500.2 µs / 81.5 GB/s (SO)**，即全部。而且在 type 5 之上那个 QP flag 对 plain dispatch
+> 毫无影响（1500 → 1508 µs）。QP 布局真正管的是 **cached dispatch**（1591 → 1741 µs，
+> 11 context 更好）和 **combine**（3895 → 3309 µs，5 context 更好），而且**符号随节点数翻转**
+> —— 4 节点上 `--num-allocated-qps 5` 反而差 5.1%（4356 → 4578 µs）。
+> 详见 [`results/p5en_2n4n_20260825/summary.txt`](../results/p5en_2n4n_20260825/summary.txt)。
+>
+> **和 2026-08-13 校准跑的对比（同机、同参数、`dispatch` 慢 10.7%；同一个 kernel）**
 >
 > 那一轮是手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 + DeepEP `7a6059a3`，args 和
 > §4.2 逐字相同、只多一个 `--skip-check`，同样 `use_fp8_dispatch=1` / 399.8 MB 每 rank：
@@ -355,8 +391,13 @@ QP-channel mapping" 落地的地方 —— 两版只差 **+10 / −0，全是 li
 
 **注意没变的东西：两边都是 `kNumParts = 4`、48 个 channel**，也就是 kernel 的模板实参完全一样。
 唯一活着的差别是这 48 个 channel 摊在多少个 QP 上 —— **08-13 是 4 QP × 12 channel，正式包是
-10 QP × 5 channel** —— 这也就成了 10.7% 目前唯一剩下的代码级候选。数据的形状至少与它不矛盾：
-plain dispatch 慢了 161 µs，而 cached dispatch **快了** 80 µs。
+10 QP × 5 channel**。
+
+> **2026-08-25 实测：这个差别是真的，但它不是那 10.7%。** 布局完全按算术走
+> （`--num-allocated-qps 5` → 日志 `5 / 49 / 5`），而且它确实动了数字 —— 动的是
+> *cached* dispatch 和 combine，不是 plain dispatch。plain dispatch 那 161 µs 是 GIN 后端。
+> 原来"plain dispatch 慢 161 µs 而 cached dispatch 快 80 µs"这个观察，现在解释为
+> **两个互相独立、恰好落在同一轮里的效应**，不是同一个。
 
 **两个曾经的猜测已被源码否掉，不要再引用：**
 
@@ -366,21 +407,56 @@ plain dispatch 慢了 161 µs，而 cached dispatch **快了** 80 µs。
   （`kNumDispatchFwdBuffers`）都在 `hybrid_dispatch_unordered.cuh` 里 —— 这是必然的，因为那个文件
   **就是** `7a6059a3` 的 kernel。
 
-**还没确认的（等 p5en 机器），而且现在只是一个 flag 的事：** 两个 commit 的
+**那个"一个 flag 的事"已经跑完了 —— 2026-08-25，4 × p5en。** 两个 commit 的
 `tests/elastic/test_ep.py` 都有 `--num-allocated-qps` / `--num-qps`，变的是这个参数的**语义**。
 `7a6059a3` 上请求值会被按 SM 算出来的 context 数**从上面截断**（`nccl.cu:172-179` 打个 warning
 然后压回去），所以 12 SM 下 5 是上限、5→11 那个方向根本走不到；`ec623f3` 上请求值**直接替换**
-默认值，只受 `[kMinGinContextCnt=2, kMaxGinContextCnt=17]` 约束（`nccl.cu:129-137`）。所以把
-§4.2 那条命令加上 **`--num-allocated-qps 5`**，布局就变成 5 context / 49 signal / 4 data QP，
-和 08-13 完全一致。如果 dispatch 回到 ~1504 µs，那 QP fan-out 就是全部原因；
-如果没回去，剩下的嫌疑只有软件栈（手编 NCCL `2.30.7-1` + 手编 `--enable-gdaki` 插件 vs 正式包
-1.50.0 的 libfabric `2.6.0amzn1.0`）和 `--skip-check`。两个 arm 都不用重 build。
-`OFI_NCCL_GIN_STRONG_SIGNAL=1` 确实在 08-13 的 env 里，但 unordered kernel 只要 weak signal，
-所以把它当独立的一个 arm 单独跑，别混进这一条。
+默认值，只受 `[kMinGinContextCnt=2, kMaxGinContextCnt=17]` 约束（`nccl.cu:129-137`）。
+
+flag 生效了 —— 表头从 `#QPs: 11/11` 变成 `#QPs: 5/5`、debug 行打 `5 / 49 / 5`，和 08-13 完全一致。
+但 dispatch **没有**回到 ~1504 µs：
+
+| arm（2 节点 16 rank / 12 SM / 8192 tok，未开 `EP_BUFFER_DEBUG`） | dispatch | SO GB/s | 线速% |
+|---|---|---|---|
+| pin `7a6059a3`，route B，`--skip-check` | 1513.9 / 1523.9 µs | 80.6 | 80.6 |
+| 正式包 `ec623f3`，默认 env | 1648–1663 µs | 74.0 | 74.0 |
+| 正式包 + `--num-allocated-qps 5` | 1631 / 1633 / 1637 µs | 75.0 | 75.0 |
+| 正式包 + `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` | **1500.2 µs** | 81.5 | 81.5 |
+| 正式包 + 完整 5 个 route-B 变量 | 1505.0 µs | 81.0 | 81.0 |
+| `main` `8e7b42e` + 那一对 | 1501.0 / 1502.0 µs | 81.0 | 81.0 |
+
+`线速% = SO × (N−1)/N ÷ 50 GB/s`，N=2 时数值上等于 SO。所以答案是：**嫌疑一直在软件栈上，
+而且具体到它的 GIN 后端默认值** —— 不是 QP fan-out，也不是 `--skip-check`。两边都切到
+type 5 之后正式包还略快于 pin，`main` 和正式包无法区分。QP 布局剩下的作用见上面那段。
+
+`OFI_NCCL_GIN_STRONG_SIGNAL=1` 确实在 08-13 的 env 里；当独立 arm 跑它在 128 tok 上
+**差 1.1%**（371.1 vs 352.0 µs），叠在 type-5 那一对之上也毫无收益 —— 和 unordered kernel
+只要 weak signal 一致。
 
 ### 5.2 Decode（`--num-tokens=128`）— 延迟。**正式版偏慢，两个 PR 待合**
 
 decode 尺寸只看延迟：每 rank 只有 **5.62–5.94 MB**（16 个 rank 的全区间）、SO 只有 5 GB/s、SU 16–17 GB/s，是**消息率受限**不是带宽受限。
+
+> ✅ **2026-08-25 已测 —— 两个效应互相独立，可以叠加。**
+> 这个担心是真的：下面这张表是在 type-2 默认上测的（`ec623f3` 367.0 µs → 两个 PR 一起
+> 166.1 µs），但**一行代码都不改**、只加 `NCCL_GIN_TYPE=5` +
+> `NCCL_SYM_GIN_KERNELS_ENABLE=0`，未打补丁的 `ec623f3` 就到 **168.9 µs** —— 同一个量级。
+> 实测把两者放一起（镜像用 PR #2 的 head `b097b03`，PR #1 是它的祖先，所以一个 SHA
+> 就是"两个 PR 叠加"这个 arm）：
+>
+> | 2 节点 / 12 SM / 128 tok dispatch | type 2 | type 5 |
+> |---|---|---|
+> | `ec623f3` 未打补丁 | 352.0 / 357.5 µs | 168.9 / 169.1 µs（**2.08×**） |
+> | #1 + #2 默认值 | 243.9 / 248.4 µs（1.44×） | **113.5 / 112.8 µs（3.10×）** |
+> | #1 + #2 + `EP_NUM_SUB_PARTS=1` | — | **106.6 µs（3.30×）** |
+> | #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`（关掉 clamp） | — | 173.3 µs |
+>
+> clamp 的**相对**收益跨后端几乎完全保持：type 2 上 352.0 → 243.9（−30.7%），
+> type 5 上 173.3 → 113.1（−34.7%）。所以 part 几何的问题不是后端的问题，
+> **这两个 PR 的论证反而更强了**。`combine`（164.2 µs）和 `reduced combine`
+> （180.9 µs）完全没动，和文档一致 —— 收益只在 dispatch。
+> **一个注意点：打了 PR 之后 2 节点 decode 是 12 SM 好过 24 SM**（113.5 vs 147.2 µs），
+> 所以 §4.2 那条"2 节点 decode 用 24 SM"只适用于未打补丁的代码。
 
 | op | 正式版 `ec623f3` | +#2 | +#1 和 #2 一起 |
 |---|---|---|---|
@@ -415,13 +491,69 @@ dispatch + combine 相加：**545 µs → 346 µs**。3 rep、变体在每个 re
 | `NCCL_NET_PLUGIN` | `ofi` | 用名字解析，别写死路径 |
 | `FI_PROVIDER` | `efa` | 是 `efa` 不是 `efa-direct`，fabric 由插件自己选 |
 | `FI_EFA_USE_DEVICE_RDMA` | `1` | |
-| `EP_BUFFER_DEBUG` | 调试时 `1` | 打 NCCL 版本 / QP 数 / GIN layout |
+| `NCCL_GIN_TYPE` | **`5`** | **必须显式设，否则默认走 type 2 代理后端**，prefill 慢 ~9%、decode 慢 2.1×。必须和下一行成对设，单独设会崩。见本节末更正 |
+| `NCCL_SYM_GIN_KERNELS_ENABLE` | **`0`** | 同上。sym GIN kernel 要 strong signal，GDAKI 没有 |
+| `EP_BUFFER_DEBUG` | **只在调试时** `1` | 打 NCCL 版本 / QP 数 / GIN layout。**但它在计时区间里 printf** —— `csrc/elastic/buffer.hpp:1151` 在 dispatch 的 host 轮询循环里拼 stringstream 打 "CPU side received count"。实测 8192 tok 只 +0.7%，但 **128 tok +6~9%**（352.0 → 371–385 µs）。`deepep-v2-efa-gdaki-b200` 的启动脚本不转发它，所以只有一侧设了的对比是被污染的。确认完 layout 就关掉 |
+| `EXTRA_ENV` | `"NAME=VALUE …"` | `run_test_ep.sh` 的一次性 env 钩子，用来做单变量 A/B（上面那对 GIN 变量就是这么传的） |
 | `EP_JIT_CACHE_DIR` | `/root/.deep_ep` | 做 A/B 时**每个变体必须用不同目录**（见 §7） |
 | `EP_DISABLE_GIN` | `0` | 设 1 关掉 GIN，用来隔离问题 |
 
 `EP_HYBRID_KERNEL` 是这个 fork 的核心：Amazon 的 unordered kernel 用 in-band token header + counting signal 同步，不依赖投递顺序；上游 ordered kernel 依赖有序 RDMA write，在 EFA 的 SRD 乱序投递下不成立。选择发生在 JIT 生成期、变体名进生成源码的文件名，所以两种模式的 JIT 缓存天然互不干扰。（"EFA" 这个词在这个 fork 的代码和 README 里一次都没出现过 —— 对外只叫 "unordered delivery"。）
 
-**1.50.0 之后不再需要的东西**（这次一个都没设，`Libfabric_GDAKI (v14)` 照样加载）：`NCCL_GIN_TYPE=5`、`FI_EFA_USE_HW_CNTR=1`、`OFI_NCCL_GIN_STRONG_SIGNAL=1`、`NCCL_RMA_DISABLE=1`、`NCCL_SYM_GIN_KERNELS_ENABLE=0`、NCCL `sym_kernels.cc` 的 GIN waiver 补丁、源码编 aws-ofi-nccl（`--enable-gdaki`）、`insmod` 自编 CE-capable `efa.ko`、`LD_PRELOAD` 顶掉 torch 的 NCCL。
+**1.50.0 之后不再需要的东西**（这次一个都没设，`Libfabric_GDAKI (v14)` 照样加载）：`FI_EFA_USE_HW_CNTR=1`、`OFI_NCCL_GIN_STRONG_SIGNAL=1`、`NCCL_RMA_DISABLE=1`、NCCL `sym_kernels.cc` 的 GIN waiver 补丁、源码编 aws-ofi-nccl（`--enable-gdaki`）、`insmod` 自编 CE-capable `efa.ko`、`LD_PRELOAD` 顶掉 torch 的 NCCL。
+
+> ⚠️ **2026-08-25 更正 —— 这份清单原来还包含 `NCCL_GIN_TYPE=5` 和 `NCCL_SYM_GIN_KERNELS_ENABLE=0`，那是错的。**
+> 这两个**必须设**，否则性能掉一大截。它们不影响 GDAKI 能不能**加载**（不设也照样打
+> `Loaded gin plugin Libfabric_GDAKI (v14)`），影响的是加载之后**用不用它**。
+>
+> 1.50.0 的 `libnccl-net-ofi.so` 注册了**两个** GIN plugin：一个 Libfabric 代理式
+> （**type 2**）、一个 `Libfabric_GDAKI`（**type 5**）。默认 NCCL 选 **type 2**。判据是
+> `NCCL_DEBUG=INFO` 下 type-5 那一侧多打的这行：
+>
+> ```
+> GIN/Plugin: Skipping plugin Libfabric index 3 type 2: NCCL_GIN_TYPE=5 requested
+> ```
+>
+> （注意：`[Proxy Progress] Device N CPU core M` 这些行**两侧都有**，各 16 条，**不是**判据 ——
+> NCCL 给普通集合通信也建代理线程。我早前把它当判据是错的。）
+>
+> **必须成对设，单独设 `NCCL_GIN_TYPE=5` 会直接崩**，日志把原因写清楚了：
+>
+> ```
+> gin/gin_host.cc:229 (ncclGinValidateSignalRequest)
+>   NCCL WARN GIN strong signals are required, but the GIN plugin does not support them.
+> gin/gin_host.cc:440 (ncclGinDevCommSetup)
+>   NCCL WARN GIN: DevComm setup failed on all available backends
+> → RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:217): 3
+> ```
+>
+> symmetric-memory GIN kernel（`NCCL_SYM_GIN_KERNELS_ENABLE`，默认 1）要求 strong signal，
+> GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它；把 type 2 排除掉又不放宽
+> strong signal 要求，就一个后端都不剩了。所以这一对是**最小且充分**的组合，加另外三个
+> route-B 变量既不必要也不会更快（`FI_EFA_USE_HW_CNTR=1` / `NCCL_RMA_DISABLE=1` /
+> `OFI_NCCL_GIN_STRONG_SIGNAL=1` 单独加都是持平到略差）。
+>
+> **实测收益**（2026-08-25，4 × p5en，16/32 rank，`--test-first-only`，未开
+> `EP_BUFFER_DEBUG`，完整数据见 [`results/p5en_2n4n_20260825/summary.txt`](../results/p5en_2n4n_20260825/summary.txt)）：
+>
+> | | 默认（type 2） | 加这一对（type 5） | |
+> |---|---|---|---|
+> | 2 节点 12 SM 8192 tok dispatch | 1648–1663 µs / 74.0 GB/s (SO) | **1500.2 µs / 81.5** | −9.4% |
+> | 2 节点 12 SM 128 tok dispatch | 352.0 / 357.5 µs | **168.9 µs** | **2.08×** |
+> | 4 节点 12 SM 8192 tok dispatch | 4356 / 4339 µs / 51.0 | **3974.0 µs / 56.0** | −8.8% |
+> | 4 节点 12 SM 128 tok dispatch | 782 / 965.9 / 1055 / 1088 / 1114 µs（双峰） | **185.5 µs**（8 rank 只散在 185–186） | **4.2–6.0×** |
+>
+> 口径：`SO` = 打印的每 rank scale-out bytes ÷ 时间，没加 `--ignore-local-traffic`
+> 所以**不是线速**；线速占比 = `SO × (N−1)/N ÷ 50 GB/s`（p5en 每 GPU 50 GB/s =
+> 16×200 Gb/s ÷ 8）。2 节点时线速占比数值上等于 SO，4 节点时是 SO × 1.5。
+> 每 rank scale-out bytes：8192 tok 下 2 节点 399.2 MB / 4 节点 444.0 MB。
+>
+> 换到 type 5 之后，**已发布的 `ec623f3` 反而比 08-13 那次手工栈（pin `7a6059a3`）稍快**
+> （prefill 1500.2 vs 1513.9 µs；decode 168.9 vs 300.5 µs，快 1.78×），`main` 的
+> `8e7b42e` 和 `ec623f3` 无法区分（1501.0/1502.0 与 169.7/169.8）。
+>
+> 传这一对的办法：`run_test_ep.sh` 已加 `EXTRA_ENV="NAME=VALUE …"` 钩子。故意**不**设成默认值，
+> 这样默认那一侧仍然是个可测的对照组。
 
 ---
 

@@ -1,0 +1,90 @@
+=== EP_NIC_NAME=rdmap110s0 (auto: 16 rdmap ports at 200 Gb/s => 50.0 GB/s per GPU at 8 GPUs) ===
+=== Route B: NCCL_GIN_TYPE=5 (EFA GDA / GDAKI) ===
++ docker run --rm --gpus all --privileged --network=host --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/infiniband --device=/dev/gdrdrv -e MASTER_ADDR=172.31.20.74 -e MASTER_PORT=29544 -e WORLD_SIZE=4 -e RANK=0 -e NCCL_DEBUG=WARN -e NCCL_GIN_TYPE=5 -e FI_EFA_USE_HW_CNTR=1 -e OFI_NCCL_GIN_STRONG_SIGNAL=1 -e NCCL_RMA_DISABLE=1 -e NCCL_SYM_GIN_KERNELS_ENABLE=0 -e EP_NIC_NAME=rdmap110s0 -e TORCHDYNAMO_DISABLE=1 -e TORCH_COMPILE_DISABLE=1 -e PYTHONUNBUFFERED=1 -e PYTHONFAULTHANDLER=1 deepep-v2-efa-gdaki-h200:dev-7a6059a3 bash -lc 'cd /opt/deepep && timeout -s ABRT --kill-after=60 1500     python -u tests/elastic/test_ep.py     --num-processes 8 --num-sms 12 --num-tokens=8192 --num-topk=8 --num-experts=256 --hidden=7168 --allow-hybrid-mode=1 --prefer-overlap-with-compute=0 --test-first-only --skip-check'
+
+=============
+== PyTorch ==
+=============
+
+NVIDIA Release 26.04 (build 297444911)
+PyTorch Version 2.12.0a0+0291f96
+Container image Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Copyright (c) 2014-2024 Facebook Inc.
+Copyright (c) 2011-2014 Idiap Research Institute (Ronan Collobert)
+Copyright (c) 2012-2014 Deepmind Technologies    (Koray Kavukcuoglu)
+Copyright (c) 2011-2012 NEC Laboratories America (Koray Kavukcuoglu)
+Copyright (c) 2011-2013 NYU                      (Clement Farabet)
+Copyright (c) 2006-2010 NEC Laboratories America (Ronan Collobert, Leon Bottou, Iain Melvin, Jason Weston)
+Copyright (c) 2006      Idiap Research Institute (Samy Bengio)
+Copyright (c) 2001-2004 Idiap Research Institute (Ronan Collobert, Samy Bengio, Johnny Mariethoz)
+Copyright (c) 2015      Google Inc.
+Copyright (c) 2015      Yangqing Jia
+Copyright (c) 2013-2016 The Caffe contributors
+All rights reserved.
+
+Various files include modifications (c) NVIDIA CORPORATION & AFFILIATES.  All rights reserved.
+
+GOVERNING TERMS: The software and materials are governed by the NVIDIA Software License Agreement
+(found at https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-software-license-agreement/)
+and the Product-Specific Terms for NVIDIA AI Products
+(found at https://www.nvidia.com/en-us/agreements/enterprise-software/product-specific-terms-for-ai-products/).
+
+NCCL version 2.31.1+cuda13.2
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+GIN auto-tuner: gin_context_cnt=5, gin_indexed_signals_cnt=49, num_qp=5, num_max_sms=12
+Config:
+ > Ranks: 4 x 8
+ > Experts: 8/256
+ > Tokens: 8192 (max: 8192), hidden: 7168
+ > #SM: 12, #QPs: 5/5
+
+Running all test cases:
+ > Testing with do_handle_copy=1, expert_alignment=128, use_fp8_dispatch=1, num_bias=0, with_previous_event=0, async_with_compute_stream=0, allocate_on_comm_stream=0 ...
+   * EP:   7/32 | dispatch: 56 GB/s (SO), 113 GB/s (SU), 3977.000 us, 447700032 bytes | copy: 2698 GB/s, 331.907 us
+   * EP:   0/32 | dispatch: 56 GB/s (SO), 111 GB/s (SU), 3986.000 us, 444435264 bytes | copy: 2945 GB/s, 301.795 us   * EP:   3/32 | dispatch: 55 GB/s (SO), 111 GB/s (SU), 3987.000 us, 444397824 bytes | copy: 2534 GB/s, 350.816 us
+
+   * EP:   2/32 | dispatch: 56 GB/s (SO), 111 GB/s (SU), 3983.000 us, 441425088 bytes | copy: 2624 GB/s, 336.481 us
+   * EP:   5/32 | dispatch: 56 GB/s (SO), 112 GB/s (SU), 3979.000 us, 444292992 bytes | copy: 2818 GB/s, 315.279 us
+   * EP:   1/32 | dispatch: 56 GB/s (SO), 111 GB/s (SU), 3988.000 us, 442361088 bytes | copy: 2699 GB/s, 327.783 us
+   * EP:   6/32 | dispatch: 56 GB/s (SO), 111 GB/s (SU), 3990.000 us, 443783808 bytes | copy: 2594 GB/s, 342.208 us
+   * EP:   4/32 | dispatch: 56 GB/s (SO), 111 GB/s (SU), 3982.000 us, 443327040 bytes | copy: 2559 GB/s, 346.464 us
+   - EP:   3/32 | expanded dispatch: 56 GB/s (SO), 112 GB/s (SU), 3978.000 us, 444397824 bytes | copy: 2350 GB/s, 400.158 us
+   - EP:   2/32 | expanded dispatch: 56 GB/s (SO), 111 GB/s (SU), 3979.000 us, 441425088 bytes | copy: 2242 GB/s, 416.439 us
+   - EP:   5/32 | expanded dispatch: 56 GB/s (SO), 112 GB/s (SU), 3975.000 us, 444292992 bytes | copy: 2434 GB/s, 385.754 us
+   - EP:   1/32 | expanded dispatch: 56 GB/s (SO), 111 GB/s (SU), 3980.000 us, 442361088 bytes | copy: 2461 GB/s, 379.544 us
+   - EP:   0/32 | expanded dispatch: 56 GB/s (SO), 112 GB/s (SU), 3982.000 us, 444435264 bytes | copy: 2486 GB/s, 378.219 us
+   - EP:   7/32 | expanded dispatch: 56 GB/s (SO), 113 GB/s (SU), 3974.000 us, 447700032 bytes | copy: 2533 GB/s, 373.865 us
+   - EP:   4/32 | expanded dispatch: 56 GB/s (SO), 112 GB/s (SU), 3971.000 us, 443327040 bytes | copy: 2463 GB/s, 381.055 us
+   - EP:   6/32 | expanded dispatch: 56 GB/s (SO), 111 GB/s (SU), 3984.000 us, 443783808 bytes | copy: 2303 GB/s, 407.156 us
+   # EP:   7/32 | cached dispatch: 47 GB/s (SO), 95 GB/s (SU), 4715.000 us, 447700032 bytes | copy: 2573 GB/s, 347.988 us
+   # EP:   1/32 | cached dispatch: 47 GB/s (SO), 93 GB/s (SU), 4735.000 us, 442361088 bytes | copy: 2147 GB/s, 412.047 us
+   # EP:   3/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4728.000 us, 444397824 bytes | copy: 2216 GB/s, 401.108 us
+   # EP:   0/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4735.000 us, 444435264 bytes | copy: 2523 GB/s, 352.329 us
+   # EP:   5/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4723.000 us, 444292992 bytes | copy: 2429 GB/s, 365.843 us
+   # EP:   2/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4720.000 us, 441425088 bytes | copy: 2286 GB/s, 386.244 us
+   # EP:   6/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4737.000 us, 443783808 bytes | copy: 2248 GB/s, 394.890 us
+   # EP:   4/32 | cached dispatch: 47 GB/s (SO), 94 GB/s (SU), 4717.000 us, 443327040 bytes | copy: 2256 GB/s, 393.074 us
+   @ EP:   4/32 | combine: 55 GB/s (SO), 110 GB/s (SU), 7762.000 us, 850657440 bytes | reduce: 3576 GB/s, 151.559 us
+   @ EP:   3/32 | combine: 49 GB/s (SO), 99 GB/s (SU), 8634.000 us, 852712064 bytes | reduce: 3594 GB/s, 150.618 us
+   @ EP:   5/32 | combine: 49 GB/s (SO), 99 GB/s (SU), 8649.000 us, 852510912 bytes | reduce: 3605 GB/s, 150.686 us
+   @ EP:   1/32 | combine: 49 GB/s (SO), 97 GB/s (SU), 8727.000 us, 848803968 bytes | reduce: 3582 GB/s, 151.728 us
+   @ EP:   2/32 | combine: 49 GB/s (SO), 98 GB/s (SU), 8676.000 us, 847007968 bytes | reduce: 3606 GB/s, 150.793 us
+   @ EP:   6/32 | combine: 49 GB/s (SO), 98 GB/s (SU), 8724.000 us, 851533888 bytes | reduce: 3596 GB/s, 150.949 us
+   @ EP:   0/32 | combine: 49 GB/s (SO), 98 GB/s (SU), 8669.000 us, 852783904 bytes | reduce: 3597 GB/s, 150.976 us
+   @ EP:   7/32 | combine: 49 GB/s (SO), 99 GB/s (SU), 8651.000 us, 859048352 bytes | reduce: 3613 GB/s, 150.147 us
+   + EP:   5/32 | reduced combine: 54 GB/s (SO), 107 GB/s (SU), 7943.000 us, 852510912 bytes | reduce: 3655 GB/s, 148.647 us
+   + EP:   3/32 | reduced combine: 48 GB/s (SO), 96 GB/s (SU), 8872.000 us, 852712064 bytes | reduce: 3626 GB/s, 149.301 us
+   + EP:   1/32 | reduced combine: 48 GB/s (SO), 95 GB/s (SU), 8955.000 us, 848803968 bytes | reduce: 3619 GB/s, 150.165 us
+   + EP:   0/32 | reduced combine: 48 GB/s (SO), 95 GB/s (SU), 8946.000 us, 852783904 bytes | reduce: 3638 GB/s, 149.264 us
+   + EP:   6/32 | reduced combine: 48 GB/s (SO), 95 GB/s (SU), 8931.000 us, 851533888 bytes | reduce: 3632 GB/s, 149.488 us   + EP:   7/32 | reduced combine: 48 GB/s (SO), 96 GB/s (SU), 8924.000 us, 859048352 bytes | reduce: 3644 GB/s, 148.875 us
+
+   + EP:   2/32 | reduced combine: 48 GB/s (SO), 95 GB/s (SU), 8960.000 us, 847007968 bytes | reduce: 3636 GB/s, 149.513 us
+   + EP:   4/32 | reduced combine: 47 GB/s (SO), 95 GB/s (SU), 8936.000 us, 850657440 bytes | reduce: 3598 GB/s, 150.656 us
+
+

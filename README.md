@@ -37,7 +37,7 @@ kept for the record and its paths are intentionally not links.
 | [`deepep-v2-efa-b300/`](deepep-v2-efa-b300/) | DeepEP V2 (B300 variant) | NCCL Gin | adds `10.0` to `TORCH_CUDA_ARCH_LIST`, sets `EP_NIC_NAME=rdmap101s0` |
 | `deepep-v2-efa-gdaki-b200/` 🔒 | DeepEP V2 — **AWS EFA-team fork** (`Xuan-1998/DeepEP@dev`) | NCCL Gin (+ GDAKI) | EFA hybrid dispatch/combine kernels, GIN QP/context auto-tuner, dedicated proxy warp; source NCCL `v2.30.7-1` + aws-ofi-nccl `master --enable-gdaki`. Runs today on the stock EFA stack (non-GDAKI GIN); GDAKI additionally needs a **counting-event-capable host `efa.ko`**, which no container can supply |
 | [`pplx-garden-efa-b300/`](pplx-garden-efa-b300/) | pplx-garden (B300 variant) | custom Rust libfabric | adds `10.3a+PTX` to `TORCH_CUDA_ARCH_LIST` and patches `p2p-all-to-all/a2a-kernels/build.rs` to emit `compute_103a/sm_103a` (upstream hardcodes `sm_100a` only, which fails at runtime on B300's `sm_103`) |
-| [`deepep-v2-efa-official/`](deepep-v2-efa-official/) ⭐ | DeepEP V2 — **public release** ([`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP)) | NCCL Gin + GDAKI | **Published packages only.** EFA installer **1.50.0** supplies efa.ko 3.3.0 + libfabric 2.6.0amzn1.0 + rdma-core 64.0amzn0 + aws-ofi-nccl 1.21.1 in one shot, so GDAKI comes up with **no source-built NCCL, no source-built aws-ofi-nccl, no patched kernel module, and none of the `NCCL_GIN_TYPE=5` / `FI_EFA_USE_HW_CNTR` / `OFI_NCCL_GIN_STRONG_SIGNAL` exports**. Same measured performance as the hand-built path |
+| [`deepep-v2-efa-official/`](deepep-v2-efa-official/) ⭐ | DeepEP V2 — **public release** ([`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP)) | NCCL Gin + GDAKI | **Published packages only.** EFA installer **1.50.0** supplies efa.ko 3.3.0 + libfabric 2.6.0amzn1.0 + rdma-core 64.0amzn0 + aws-ofi-nccl 1.21.1 in one shot, so GDAKI comes up with **no source-built NCCL, no source-built aws-ofi-nccl and no patched kernel module**. ⚠️ But it *loads* GDAKI without *using* it: 1.50.0 registers a second, type-2 proxy-assisted GIN plugin and picks that by default, so **`NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` are still required for performance** (prefill −9%, decode 2.1× without them). With them set, performance matches or beats the hand-built path |
 
 **If you want DeepEP V2 on EFA today, start with
 [`deepep-v2-efa-official/`](deepep-v2-efa-official/)** — it is the released stack on
@@ -98,9 +98,13 @@ dispatch number** in the struck-through cell. Config differences you must carry:
 dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8 dispatch, 12 SM**
 (81.25 GB/s = 1504 µs dispatch, 65.75 = 3592 µs combine, 399.8 MB per rank,
 `results/p5en_ours_20260813/summary.txt`; the released-package image measures
-72–75 GB/s / 1665 µs on the same args — same kernel, but it spreads the same 48 channels
-over 10 GIN QPs where that run used 4; see
-[`deepep-v2-efa-official/`](deepep-v2-efa-official/) §Prefill for that 10.7% gap), and
+72–75 GB/s / 1665 µs on the same args — **same kernel, and as of 2026-08-25 the cause is
+known: the packaged EFA 1.50.0 stack defaults to the type-2 proxy-assisted GIN backend,
+not GDAKI. Set `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` and the released image
+measures 81.5 GB/s / 1500.2 µs, i.e. slightly better than this row.** The earlier
+"10 GIN QPs vs 4" explanation is retracted — that flag moves dispatch only 1.7% and its
+sign flips with node count; see
+[`deepep-v2-efa-official/results/p5en_2n4n_20260825/summary.txt`](deepep-v2-efa-official/results/p5en_2n4n_20260825/summary.txt)), and
 the GB/s is `test_ep.py`'s **SO** denominator. **SO counts intra-node destinations
 too, so halve it for a wire rate** — 125 GB/s SO = 62.5 GB/s of the 100 GB/s
 per-GPU wire. UCCL's `GB/s (RDMA)` in the row above uses the **same** denominator
