@@ -6,52 +6,62 @@ Builds and runs the **public release** of AWS's DeepEP V2 fork —
 
 **Everything here comes from published packages.** No source-built NCCL, no
 source-built aws-ofi-nccl, no hand-patched kernel module, no `LD_PRELOAD`.
-**EFA installer 1.50.0 supplies all four load-bearing components at once**, and
-GDAKI loads on its own.
-
-> ⚠️ **CORRECTION 2026-08-25 — two of those exports are still load-bearing, for
-> performance.** An earlier version of this README and of `docs/runbook_zh.md`
-> §"1.50.0 之后不再需要的东西" said none of the route-B env vars are needed with
-> 1.50.0. GDAKI does *load* without them, but 1.50.0's `libnccl-net-ofi.so`
-> registers **two** GIN plugins — a Libfabric proxy-assisted one (**type 2**) and
-> `Libfabric_GDAKI` (**type 5**) — and NCCL selects **type 2** by default. You
-> must force type 5:
->
-> ```
-> NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0     # both, or it crashes
-> ```
->
-> Measured on 2 × p5en, 16 ranks, 12 SM ([full data](results/p5en_2n4n_20260825/summary.txt)):
-> prefill dispatch **1655 → 1500.2 µs** (74.0 → 81.5 GB/s SO), 128-tok decode
-> dispatch **352.0 → 168.9 µs (2.08×)**. At 4 nodes / 32 ranks: prefill
-> **4356 → 3974.0 µs**, decode **782–1114 → 185.5 µs (4.2–6.0×)**, and the 4-node
-> decode bimodality disappears. The other three route-B vars
-> (`FI_EFA_USE_HW_CNTR=1`, `OFI_NCCL_GIN_STRONG_SIGNAL=1`, `NCCL_RMA_DISABLE=1`)
-> remain unnecessary — neutral to slightly worse.
->
-> `NCCL_GIN_TYPE=5` **alone crashes**; the log says why:
-> `ncclGinValidateSignalRequest: GIN strong signals are required, but the GIN
-> plugin does not support them` → `GIN: DevComm setup failed on all available
-> backends` → `RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:217): 3`.
-> The symmetric-memory GIN kernels (default on) require strong signals, which
-> GDAKI does not implement; while type 2 is still a candidate NCCL silently falls
-> back to it, and once type 2 is excluded no backend is left. Hence the pair.
-> The discriminating log line is
-> `GIN/Plugin: Skipping plugin Libfabric index 3 type 2: NCCL_GIN_TYPE=5 requested`
-> (`NCCL_DEBUG=INFO`). Note that `[Proxy Progress]` thread lines appear in **both**
-> arms (16 each) and are *not* a discriminator.
+**EFA installer 1.50.0 supplies all four load-bearing components at once.**
 
 That is the difference from `deepep-v2-efa-gdaki-b200/` (local-only, not committed — 673 MB
 of campaign results), which builds `Xuan-1998/DeepEP@dev` with a hand-assembled stack. Measured on the same
 p5en pair, this packaged path costs **nothing** in performance (§ Results).
+
+## The two environment variables you must set
+
+1.50.0's `libnccl-net-ofi.so` registers **two** GIN plugins — a Libfabric
+proxy-assisted one (**type 2**) and `Libfabric_GDAKI` (**type 5**) — and NCCL
+selects **type 2** by default. `Loaded gin plugin Libfabric_GDAKI (v14)` prints
+either way, so that line does **not** mean GDAKI ran. Force type 5:
+
+```
+NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0     # both, or it crashes
+```
+
+12 SM, `--test-first-only`, no `EP_BUFFER_DEBUG`, mean over **all** ranks; `SO` =
+printed per-rank scale-out bytes ÷ time, not a wire rate
+([full data](results/p5en_2n4n_20260825/summary.txt)):
+
+| dispatch | type 2 (default) | **type 5** |
+|---|---|---|
+| 2 nodes / 16 ranks, 8192 tok | 1644.0 µs / 74.0 GB/s | **1502.9 µs / 81.2** |
+| 2 nodes / 16 ranks, 128 tok | 365.1 µs | **169.4 µs (2.16×)** |
+| 4 nodes / 32 ranks, 8192 tok | 4316.2 µs / 51.5 GB/s | **3955.3 µs / 56.0** (84% of wire) |
+| 4 nodes / 32 ranks, 128 tok | 1001.2 µs, reps 833–1083 | **184.5 µs (5.43×)**, all 32 ranks in 183.4–185.9 |
+
+**The gap widens with scale**, which is what makes this worth chasing: from 2 to 4
+nodes type-2 decode dispatch goes 365 → 1001 µs (2.7×) while type 5 goes
+169.4 → 184.5 µs (1.09×).
+
+**Both are needed because the crash is informative.** `NCCL_GIN_TYPE=5` alone gives
+`ncclGinValidateSignalRequest: GIN strong signals are required, but the GIN plugin
+does not support them` → `GIN: DevComm setup failed on all available backends` →
+`RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:217): 3`. The
+symmetric-memory GIN kernels (on by default) require strong signals, which GDAKI does
+not implement. While type 2 is still a candidate NCCL silently falls back to it; once
+type 2 is excluded and the signal requirement stands, no backend is left.
+
+**How to confirm which backend ran** (`NCCL_DEBUG=INFO`): the type-5 arm prints
+`GIN/Plugin: Skipping plugin Libfabric index 3 type 2: NCCL_GIN_TYPE=5 requested`,
+and `devCommCreate: creating 11 contexts`. `[Proxy Progress] Device N CPU core M`
+lines are **not** a discriminator — 16 of them appear in both arms, because NCCL
+builds proxy threads for ordinary collectives regardless.
+
+Nothing else needs setting. `FI_EFA_USE_HW_CNTR=1`, `OFI_NCCL_GIN_STRONG_SIGNAL=1`
+and `NCCL_RMA_DISABLE=1` are neutral to slightly worse (§ Results).
 
 > **中文完整版 runbook：[`docs/runbook_zh.md`](docs/runbook_zh.md)** — host 安装、镜像构建、
 > prefill 带宽 / decode 延迟测试、环境变量速查、故障对照表、CE 探针源码。
 > This README is the condensed English version; the Chinese runbook is authoritative
 > and carries the full troubleshooting table.
 
-Verified 2026-08-21 on installer 1.50.0 / `deep_ep 2.1.0+ec623f3`, 16 ranks, exit 0
-with correctness checks passing.
+Verified on installer 1.50.0 / `deep_ep 2.1.0+ec623f3` across 2 and 4 nodes (16 and 32
+ranks), exit 0 with correctness checks passing.
 
 ## The dependency chain
 
@@ -191,14 +201,13 @@ All three were verified by an actual rebuild, not by reasoning.
   2.31.2 at *run* time via rpath. Headers were always pip's 2.31.2, so the result was
   correct, but the dependency was implicit.
 
-**Validation of the hardened image** (rebuilt on both nodes 2026-08-21, then re-run):
+**Validation of the hardened image** (rebuilt on every node, then re-run):
 `git -C /opt/DeepEP rev-parse HEAD` = `ec623f31…`; `dpkg -l | grep -c libnccl2` = 0;
 `ldconfig -p | grep libnccl.so` = empty; `/proc/self/maps` after `import deep_ep` shows
 **exactly one** libnccl, pip's `nvidia/nccl/lib/libnccl.so.2`; `ncclGinPlugin_v14` present;
 20 `comp_cntr` symbols; and the run logs `Loaded gin plugin Libfabric_GDAKI (v14)`.
-Performance is unchanged — prefill dispatch **74 GB/s SO / 240–244 SU / 1649 µs** (table
-below: 1665.1 ± 12.4), decode dispatch **351.2–351.7 µs** (below: 367.0 ± 12.1) and
-combine **170.8–184.9 µs** (below: 178.1 ± 5.0), all inside the across-rep spread.
+Performance is unchanged by the hardening — prefill dispatch **74.0 GB/s SO / 1644.0 µs**
+on the default backend, inside that arm's across-rep spread (§ Results).
 
 ## Run
 
@@ -213,9 +222,9 @@ ssh <leader> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 EXTRA_E
 **latency**). Nothing else changes between the two.
 
 `EXTRA_ENV="NAME=VALUE …"` is the launcher hook for one-off env A/Bs; it is how
-the `NCCL_GIN_TYPE=5` pair above is passed. Without that pair you get the type-2
-proxy backend and ~10% less prefill / ~2× the decode latency (see the correction
-at the top). It is deliberately not baked in as a default so that the default arm
+the `NCCL_GIN_TYPE=5` pair is passed. Without that pair you get the type-2 proxy
+backend: ~9% less prefill and 2.2–5.4× the decode latency (§ The two environment
+variables). It is deliberately not baked in as a default so that the default arm
 stays a measurable control.
 
 **`test_ep.py` is not torchrun.** It `mp.spawn`s its own local ranks, so
@@ -240,35 +249,33 @@ moment you go multi-node.
 **And `--num-sms` is not a free parameter.** It also changes the allocated QP count, and
 *non-monotonically*: measured 0→17 QPs, 12→5, 24→10. A value landing on
 `num_qps < num_ranks` **hangs outright** — the GIN auto-tuner prints its lines and then
-nothing for 600 s. 16 ranks / 12 SM is fine (`num_qp=11`). For numbers comparable to AWS's
-published rows, stay on their operating points: **H200 2-node 12 SM / H200 4-node 6 SM /
-B200 2-node 12 SM**.
+nothing for 600 s. 16 ranks / 12 SM is fine (`num_qp=11`). To reproduce AWS's published
+rows, use their operating points: **H200 2-node 12 SM / H200 4-node 6 SM / B200 2-node
+12 SM**.
 
-> **But those are not the fastest points on this code — use 24 SM.** Measured
-> 2026-08-25 on 4 × p5en, all on GIN type 5, `--test-first-only`, no
-> `EP_BUFFER_DEBUG` ([data](results/p5en_2n4n_20260825/summary.txt) TABLE 4/6):
->
-> | | 2N dispatch | 2N reduced combine | 2N sum | 4N dispatch | 4N reduced combine |
-> |---|---|---|---|---|---|
-> | 6 SM | 2263.0 µs | 7384.5 µs | 9647.5 µs | 4049.8 µs | 9039.6 µs |
-> | 12 SM | 1500.2 µs | 4425.1 µs | 5925.3 µs | **3970.3 µs** (3 reps) | 8116.7 µs (7554–9003) |
-> | **24 SM** | 1536.0 µs | **3091.7 µs** | **4627.7 µs** | 3991.5 µs (2 reps) | 7865.9 µs (7588–8144) |
-> | 32 SM | 1576.0 µs | 3639.8 µs | 5215.8 µs | — | — |
->
-> **At 2 nodes, 24 SM.** It gives up 36 µs of dispatch (+2.4%) to win 1333 µs of
-> reduced combine (−30%): layer total **−22%**. At 128 tok it wins outright
-> (dispatch 147.8 vs 168.9 µs, reduced combine 162.4 vs 181.0 µs).
->
-> **At 4 nodes there is no clear winner for prefill — do not claim one.** dispatch
-> is flat from 6→24 SM (2.0% spread) and very reproducible (12 SM: 3974.0 / 3970.0
-> / 3967.0). Reduced combine nominally favours 24 SM on the means but the
-> distributions overlap heavily across reps, so 12 SM is the pick purely on
-> dispatch. **For 4-node decode, take 24 SM**: dispatch is identical to 12 SM
-> (185.5 µs both) while reduced combine drops 243.5 → 221.2 µs (−9.4%).
->
-> **The kit's old "6 SM on 4 nodes" is wrong**: on the type-2 default it was 18.7%
-> worse than 12 SM (5360 vs 4356 µs) and it never hung. On type 5 that 23% dispatch
-> penalty vanishes entirely, so it was a type-2 artifact, not an SM effect.
+**For the fastest configuration, use 24 SM at both 2 and 4 nodes.** GIN type 5, 8192 tok,
+mean over all ranks, no `EP_BUFFER_DEBUG`
+([data](results/p5en_2n4n_20260825/summary.txt) TABLE 5/6):
+
+| | 2N dispatch | 2N redComb | 2N sum | 4N dispatch | 4N redComb | 4N sum |
+|---|---|---|---|---|---|---|
+| 6 SM | 2290.5 µs | 7371.6 µs | 9662.1 µs | 4031.7 µs | 9494.3 µs | 13526.0 µs |
+| 12 SM | 1502.9 µs | 4226.0 µs | 5728.9 µs | 3955.3 µs | 7963.6 µs | 11918.9 µs |
+| 16 SM | 1510.6 µs | 3568.1 µs | 5078.7 µs | — | — | — |
+| **24 SM** | 1535.7 µs | **3364.3 µs** | **4900.0 µs** | 3972.6 µs | **7709.8 µs** | **11682.4 µs** |
+| 32 SM | 1576.5 µs | 3486.4 µs | 5062.9 µs | — | — | — |
+
+Reps: 24 SM ×3 at 2N, 12 SM ×3 and 24 SM ×2 at 4N; single runs elsewhere.
+
+**Dispatch is nearly flat from 12 to 24 SM** (+2.2% at 2 nodes, +0.4% at 4) — it is
+*reduced combine* that pays for a small SM count. So the trade is 33 µs of dispatch for
+862 µs of reduced combine at 2 nodes (layer total **−14.5%**), and a much smaller but
+same-signed trade at 4 nodes (**−2.0%**). Decode agrees: at 2 nodes 24 SM wins outright
+(dispatch 147.3 vs 169.4 µs, redComb 160.4 vs 179.0 µs); at 4 nodes decode dispatch is
+flat across 6/12/24 SM (181–185 µs) and 24 SM wins on redComb (239.1 vs 253.5 µs, −5.7%).
+
+**6 SM is the wrong choice at every scale** — 52% worse than 24 SM at 2 nodes, 13.5%
+worse at 4 — and it never hangs, so nothing is protecting you from it.
 
 ### The GIN evidence to look for
 
@@ -299,93 +306,118 @@ Check the NCCL version from that line or from `NCCL_DEBUG=INFO`'s
 torch's compile-time header (2.29.7) forever. There are **three** NCCL versions in the
 image; see the Chinese runbook's Appendix B.
 
-## Results (2 × p5en.48xlarge, 2026-08-21)
+## Results (p5en.48xlarge × 2 and × 4, 2026-08-25)
 
-Ubuntu 24.04, driver 595.91.07, installer upgraded 1.49.0 → 1.50.0 + reboot. Container
-torch 2.13.0+cu130 / nccl 2.31.2 / `deep_ep 2.1.0+ec623f3`. 16-rank `test_ep.py` exits 0
-with all correctness checks passing; `fi_pingpong -p efa` passes (64 B 1.73 MB/s,
-4 K 282.48 MB/s).
+Ubuntu 24.04, driver 595.91.07, installer 1.50.0 + reboot. Container torch 2.13.0+cu130 /
+nccl 2.31.2 / `deep_ep 2.1.0+ec623f3`. `test_ep.py` exits 0 at 16 and 32 ranks with all
+correctness checks passing; `fi_pingpong -p efa` passes (64 B 1.73 MB/s, 4 K 282.48 MB/s).
+Every number below is on **GIN type 5**, at **24 SM**, with `EP_BUFFER_DEBUG` **off**, and
+is a mean over **all** ranks. Raw logs and the full matrix (backend A/B, SM scan, env
+teardown, PR arms):
+[`results/p5en_2n4n_20260825/`](results/p5en_2n4n_20260825/summary.txt).
 
-> ⚠️ **Every number in this section was taken on the default GIN backend — i.e.
-> type 2, the proxy-assisted one.** They are still the correct *default-env* control,
-> but they are not this stack's best. For the type-5 numbers and the 2-node/4-node
-> matrix see [`results/p5en_2n4n_20260825/summary.txt`](results/p5en_2n4n_20260825/summary.txt).
->
-> ⚠️ **`EP_BUFFER_DEBUG=1` inflates these numbers.** `csrc/elastic/buffer.hpp:1151`
-> builds a stringstream and `printf`s "CPU side received count" **from inside
-> dispatch's host polling loop**, i.e. inside the timed region. Measured cost:
-> **+0.7% at 8192 tok but +6–9% at 128 tok** (352.0 → 371–385 µs). The
-> `deepep-v2-efa-gdaki-b200` launcher does not forward it, so any comparison where
-> only one arm set it is confounded. Use it to confirm the GIN layout, then turn it
-> off for anything you publish.
+**Denominators, stated once.** `SU` = the printed per-rank `bytes` ÷ time exactly.
+**`SO` is not a wire rate** — without `--ignore-local-traffic` it counts intra-node
+destinations too. The per-rank wire ceiling on p5en is **50 GB/s** (16 × 200 Gb/s ÷ 8
+GPUs), so a reported 79 GB/s dispatch is by itself proof the figure is not a network
+number; the wire fraction is `SO × (N−1)/N ÷ 50`, which at 2 nodes is numerically `SO`.
+Pass `IGNORE_LOCAL=1` for a wire-rate run.
 
 ### Prefill (`--num-tokens=8192`) — bandwidth
 
-Full range across **all 16 ranks** (not one rank, not one node — see Rules below):
+| op | 2 nodes / 16 ranks | | | 4 nodes / 32 ranks | | |
+|---|---|---|---|---|---|---|
+| | SO GB/s | SU GB/s | time | SO GB/s | SU GB/s | time |
+| dispatch | 79–80 | 257–263 | 1535.6 µs | 55–56 | 111–113 | 3972.6 µs |
+| expanded dispatch | 79–80 | 258–262 | 1537.3 µs | 55–56 | 111–113 | 3970.7 µs |
+| cached dispatch | 75–76 | 244–249 | 1620.7 µs | 51–52 | 103–106 | 4256.6 µs |
+| combine | 62–73 | 202–239 | 3529.1 µs | 51–57 | 103–115 | 7702.1 µs |
+| reduced combine | 64–79 | 209–259 | 3364.3 µs | 51–57 | 103–115 | 7710.1 µs |
 
-| op | SO GB/s | SU GB/s | time | bytes/rank |
-|---|---|---|---|---|
-| dispatch | 72–75 | 233–246 | 1665.1 ± 12.4 µs | 399.8 MB |
-| expanded dispatch | 74–75 | 240–246 | 1644.4 ± 8.2 µs | 399.8 MB |
-| cached dispatch | 73–74 | 236–244 | 1662.8 ± 8.7 µs | 399.8 MB |
-| combine | 60–73 | 196–240 | 3560.8 ± 9.2 µs | 767.1 MB |
-| reduced combine | 52–59 | 170–194 | 4243.9 ± 9.6 µs | 767.1 MB |
+bytes/rank: dispatch 395.9–402.4 MB (2N) / 441.4–447.7 MB (4N); combine 759.7–772.1 MB /
+847.0–859.0 MB. 3 reps at 2N, 2 at 4N; SO/SU are min–max over all ranks and reps, time is
+the pooled mean.
 
-3 reps; mean over 16 ranks then over reps, ± is stdev **across reps**.
+**Dispatch runs at 80% of the wire ceiling at 2 nodes and 84% at 4** — 4 nodes is the
+higher wire fraction because 3/4 of the traffic leaves the box instead of 1/2, even
+though the raw `SO` is lower. **Going 2 → 4 nodes costs 2.59× in dispatch time** for 2×
+the ranks and 1.12× the per-rank bytes, so scale-out here is sublinear in a way dispatch
+bandwidth alone does not show; report the µs.
 
-**Denominators.** `SU` = the printed per-rank `bytes` ÷ time exactly (399.8 MB / 1665 µs
-= 240 GB/s). **`SO` is not a wire rate** — without `--ignore-local-traffic` it counts
-intra-node destinations too. The per-rank wire ceiling on p5en is **50 GB/s**
-(16 × 200 Gb/s ÷ 8 GPUs), so a reported 74 GB/s dispatch is by itself proof that the
-figure is not a network number. Pass `IGNORE_LOCAL=1` for a wire-rate run.
+### Decode (`--num-tokens=128`) — latency
 
-**Combine dispersion is layered by node**, not a single outlier rank:
+At this size only latency is meaningful: 5.6–6.4 MB per rank, 11–19 GB/s SO. It is
+**message-rate** bound, not bandwidth bound.
 
-| op | slow node's 8 ranks | fast node's 8 ranks |
+| op | 2 nodes / 16 ranks | 4 nodes / 32 ranks |
 |---|---|---|
-| dispatch | 73 GB/s / 1679 µs | 73 GB/s / 1670 µs (0.5% apart) |
-| combine | 60–65 / **3634–3942 µs** | 63–73 / **3208–3714 µs** |
-| reduced combine | 52–55 / **4302–4495 µs** | 54–59 / **3956–4334 µs** |
+| dispatch | 147.3 µs | 184.7 µs |
+| expanded dispatch | 146.6 µs | 184.0 µs |
+| cached dispatch | 135.8 µs | 184.2 µs |
+| combine | 151.9 µs | 236.5 µs |
+| reduced combine | 160.4 µs | 239.1 µs |
 
-All 8 ranks on one machine are ~700 µs (**+21%**) slower in combine and ~8% slower in
-reduced combine; dispatch shows no such split. **So never quote one node's range.** Which
-machine is slow flips between runs, so a single run cannot tell you whether this is an
-intrinsic leader-node effect — we draw no mechanism conclusion here.
+**Crossing from 2 to 4 nodes costs only +37 µs of dispatch (+25%)** while doubling the
+rank count — decode dispatch on type 5 barely notices scale. combine is where 4 nodes
+actually hurts (+56%). Two pending PRs take 2-node dispatch to 106 µs; see below.
 
-> ⚠️ **RETRACTED 2026-08-25 — the 10.7% is the GIN *backend*, not the QP layout.**
-> The blockquote and the source analysis below are kept because the blob-level
-> "same kernel" conclusion still holds and the QP-layout arithmetic is still
-> correct; but the *causal* claim is wrong. Measured on the same two nodes:
-> `--num-allocated-qps 5` does change the layout to `5 / 49 / 5` — proving the flag
-> works at `ec623f3` — yet plain dispatch only moves **1660 → 1632 µs (−1.7%)**,
-> at most ~20% of the gap. Adding `NCCL_GIN_TYPE=5` +
-> `NCCL_SYM_GIN_KERNELS_ENABLE=0` instead takes dispatch to **1500.2 µs / 81.5 GB/s**,
-> i.e. all of it, and on top of type 5 the QP flag does nothing to plain dispatch
-> (1500 → 1508 µs). What the QP layout *does* govern is **cached dispatch**
-> (1591 → 1741 µs, 11 contexts better) and **combine** (3895 → 3309 µs, 5 contexts
-> better) — and its sign flips with node count (at 4 nodes `--num-allocated-qps 5`
-> is 5.1% *worse*: 4356 → 4578 µs). See
-> [`results/p5en_2n4n_20260825/summary.txt`](results/p5en_2n4n_20260825/summary.txt).
->
-> **Versus the 2026-08-13 calibration run — `dispatch` is 10.7% slower. It is the same
-> kernel** (blob-level proof below). That run used source NCCL `2.30.7-1` + source
-> aws-ofi-nccl `--enable-gdaki`
-> + DeepEP `7a6059a3`; its `test_ep.py` args are byte-identical to §"Run" apart from an
-> extra `--skip-check`, same `use_fp8_dispatch=1`, same 399.8 MB per rank, same two nodes.
->
-> | op | 08-13 hand-built `7a6059a3` | here, packaged `ec623f3` | Δ time |
-> |---|---|---|---|
-> | dispatch | 81.25 GB/s / 1504 µs | 72–75 / 1665.1 µs | **+10.7%** |
-> | expanded dispatch | 81.44 / 1501 µs | 74–75 / 1644.4 µs | +9.6% |
-> | cached dispatch | 70.06 / 1743 µs | 73–74 / 1662.8 µs | **−4.6%** |
-> | combine | 65.75 / 3592 µs | 60–73 / 3560.8 µs | −0.9% |
-> | reduced combine | 56.00 / 4195 µs | 52–59 / 4243.9 µs | +1.2% |
->
-> This is not a broad slowdown — combine barely moves and **all three dispatch variants
-> collapse onto ≈1664 µs**. On 08-13 `dispatch` beat `cached dispatch` by 240 µs (AWS's own
-> reference likewise, 81.00 vs 69.94); here that gap is gone. So the accurate statement is
-> that *dispatch lost its advantage over cached dispatch*.
-> Raw data: `deepep-v2-efa-gdaki-b200/results/p5en_ours_20260813/summary.txt` (🔒 local-only).
+### combine is layered by node — this decides how you aggregate
+
+dispatch is uniform across ranks; combine and reduced combine split cleanly by machine.
+One 2-node / 24 SM / 8192 tok run, mean over each node's 8 ranks:
+
+| op | node 1 | node 2 |
+|---|---|---|
+| dispatch | 1536.0 µs | 1535.0 µs (0.1% apart) |
+| combine | 3302.9 µs | 3763.9 µs (**14% apart**) |
+| reduced combine | 3091.7 µs | 3653.9 µs (**18% apart**) |
+
+Which machine is the slow one flips between runs, so a per-node combine mean lands at
+either ~3100 or ~3670 µs depending on which log you happen to read — that looks like
+bistable behaviour and is not. Pooled over all 16 ranks the three reps agree to 1.7%
+(3391.5 / 3335.7 / 3365.5 µs). **Always pool every rank.** We draw no mechanism
+conclusion about *why* one machine is slower.
+
+### Versus building the whole stack from source
+
+There is no performance reason to. Measured on the same nodes on the same day, GDAKI
+active on both sides: the `7a6059a3` pin (source NCCL `2.30.7-1` + source aws-ofi-nccl
+`--enable-gdaki`, launched with `GDAKI=1`, `--skip-check`) against the packaged
+`ec623f3` image with the two env vars. 12 SM, all-rank means:
+
+| | pin, source stack | packaged, type 5 |
+|---|---|---|
+| 2N / 8192 tok dispatch | 1515.0 µs | **1502.9 µs** |
+| 2N / 8192 tok cached dispatch | 1749.0 µs | **1591.0 µs** (−9.0%) |
+| 2N / 128 tok dispatch | 303.9 µs | **169.4 µs** (1.79×) |
+| 4N / 8192 tok dispatch | 3961.0 µs | **3955.3 µs** |
+| 4N / 8192 tok cached dispatch | 4710.3 µs | **4239.4 µs** (−10.0%) |
+| 4N / 128 tok dispatch | 320.8 µs | **184.5 µs** (1.74×) |
+
+Prefill dispatch is a tie (0.1–0.8% apart). The packaged path wins cached dispatch by
+9–10% and decode dispatch by 1.74–1.79×. Everything the hand-built stack was assembled
+to obtain — GDA ops, the CE counting signal, the GDAKI plugin — ships in installer 1.50.0.
+
+### Why the GIN backend is the lever and the QP layout is not
+
+`--num-allocated-qps` is the obvious suspect, because the two stacks really do run
+different QP layouts, and the flag really does work: pass `--num-allocated-qps 5` at
+`ec623f3` and the header goes `#QPs: 11/11` → `#QPs: 5/5` with the debug line printing
+`5 / 49 / 5`. It buys nothing:
+
+| 2N / 12 SM / 8192 tok | dispatch | cached dispatch | combine | reduced combine |
+|---|---|---|---|---|
+| type 2, default 11 contexts | 1644.0 µs | 1652.2 µs | 3512.5 µs | 4196.6 µs |
+| type 2, `--num-allocated-qps 5` | 1631.1 µs | 1614.5 µs | 3719.3 µs | 4281.0 µs |
+| type 5, default 11 contexts | **1502.9 µs** | **1591.0 µs** | 3629.9 µs | 4226.0 µs |
+| type 5, `--num-allocated-qps 5` | 1508.5 µs | 1743.9 µs | 3605.1 µs | 4236.6 µs |
+
+Plain dispatch moves −0.8% on type 2 and not at all on type 5. Where the layout *does*
+matter is **cached** dispatch, and there 5 contexts is 9.6% **worse** on type 5; at 4
+nodes it is 19.6% worse on decode dispatch (1001.2 → 1197.5 µs). **Leave it at the
+default 11.** The source arithmetic below explains why the layouts differ and confirms
+the kernel is identical on both sides — which is what makes the backend the only
+remaining variable.
 
 **It is the same kernel — established at blob level, not from commit messages.** Everything
 below is verifiable from source, no hardware needed. At `ec623f3` the hybrid dispatch kernel
@@ -393,7 +425,7 @@ exists twice (`ec623f3` = `feat: add EP_HYBRID_KERNEL toggle between unordered a
 kernels`, `unordered` the default per `csrc/kernels/elastic/kernel_select.hpp:37-52`), and
 comparing blobs settles which is which:
 
-| file at `ec623f3` | vs `af9a040:hybrid_dispatch.cuh` (pre-fork upstream) | vs `7a6059a3:hybrid_dispatch.cuh` (what 08-13 ran) |
+| file at `ec623f3` | vs `af9a040:hybrid_dispatch.cuh` (pre-fork upstream) | vs `7a6059a3:hybrid_dispatch.cuh` (the hand-built pin) |
 |---|---|---|
 | `hybrid_dispatch.cuh` — the `ordered` variant | **+6 / −1** | +56 / −468 |
 | `hybrid_dispatch_unordered.cuh` — **the default** | +485 / −51 | **+45 / −28** (11 of them the license header) |
@@ -405,11 +437,11 @@ Combine tells the same story (`+12/−6` vs `+24/−7`). The entire functional c
 two lambdas hoisted out of the two warp branches, the identity lambda `phys_token_slot`
 dropped, and comments.
 
-⇒ **"The two runs are not the same kernel" is retracted, and `EP_HYBRID_KERNEL=ordered` is
-not the A/B to run.** That flag selects the *upstream* kernel, which publishes a tail signal
-and lets the receiver assume everything before it landed — we measured earlier that this is
-**incorrect on EFA GDAKI** (`NCCL_GIN_TYPE=5`, where the signal can overtake the data); it is
-only correct on the ordered proxy path. It also asks NCCL for a different fabric altogether
+⇒ **`EP_HYBRID_KERNEL=ordered` is not a valid A/B.** That flag selects the *upstream*
+kernel, which publishes a tail signal and lets the receiver assume everything before it
+landed — measured **incorrect on EFA GDAKI** (`NCCL_GIN_TYPE=5`, where the signal can
+overtake the data); it is only correct on the ordered proxy path. It also asks NCCL for a
+different fabric altogether
 (`csrc/kernels/backend/nccl.cu:111-127`: 129 **exclusive** contexts, `ginSignalCount =
 num_ranks + 4`, `ginVaSignalsRequired`, `ginStrongSignalsRequired`), so it would not be a
 one-variable change even if it were correct.
@@ -428,119 +460,118 @@ digit for digit:
 
 | | contexts (= QPs) | signals/ctx | data QPs (= ctx − 1 notify) | channels/ctx | `kNumParts` | channels/SM | logged |
 |---|---|---|---|---|---|---|---|
-| `7a6059a3` (08-13) | `ceil_div(12×4, kMinGinContextSharingFactor=10)` = **5**, so **SM-dependent** | `(256 − 2·5)/5` = 49 | 4 | `ceil(48/4)` = 12 | `49/12` → **4** | 4 | `5 / 49 / 5` ✅ |
-| `ec623f3` (here) | `kMinGinContextSharingFactor` deleted; auto path is the constant `kDefaultGinContextCnt` = **11**, **SM-independent** | `(256 − 2·11)/11` = 21 | 10 | `ceil(48/10)` = 5 | `21/5` → **4** | 4 | `11 / 21 / 11` ✅ |
+| `7a6059a3` (the pin) | `ceil_div(12×4, kMinGinContextSharingFactor=10)` = **5**, so **SM-dependent** | `(256 − 2·5)/5` = 49 | 4 | `ceil(48/4)` = 12 | `49/12` → **4** | 4 | `5 / 49 / 5` ✅ |
+| `ec623f3` (the release) | `kMinGinContextSharingFactor` deleted; auto path is the constant `kDefaultGinContextCnt` = **11**, **SM-independent** | `(256 − 2·11)/11` = 21 | 10 | `ceil(48/10)` = 5 | `21/5` → **4** | 4 | `11 / 21 / 11` ✅ |
 
 **Note what does not change: `kNumParts = 4` and 48 channels on both sides**, so the kernel
 is instantiated with identical template arguments. The only live difference is how many QPs
-those same 48 channels are spread across — **4 QPs × 12 channels (08-13) vs 10 QPs × 5
-channels (release)**.
+those same 48 channels are spread across — **4 QPs × 12 channels (pin) vs 10 QPs × 5
+channels (release)** — and the table above measures that difference to be worth nothing on
+plain dispatch.
 
-> **Measured 2026-08-25: this is real but it is not the 10.7%.** The layout does
-> exactly what the arithmetic says (`--num-allocated-qps 5` → logged `5 / 49 / 5`),
-> and it does move numbers — but *cached* dispatch and combine, not plain dispatch.
-> The 161 µs of plain dispatch was the GIN backend. The observation that "plain
-> dispatch lost 161 µs while cached dispatch *gained* 80 µs" is now explained as
-> two independent effects that happened to land in the same run, not one.
+Two things the arithmetic rules out as candidate mechanisms:
 
-**Two earlier guesses are refuted — do not cite them:**
-
-- **`kNumParts` is not the mechanism.** Computed above from `compute_part_allocation()`
+- **`kNumParts` is not it.** Computed from `compute_part_allocation()`
   (`gin_resource_alloc.cuh:122-152`): **4 on both sides**. `ec623f3`'s own comment agrees,
   listing 11's equivalents as `{5, 6, 7, 8, 9, 14}`.
-- **It is not "the new branch lost the tuning".** Front-loading (`kMidTotal`) and the forward
+- **The release did not "lose the tuning".** Front-loading (`kMidTotal`) and the forward
   double-buffer (`kNumDispatchFwdBuffers`) are both present in
   `hybrid_dispatch_unordered.cuh` — necessarily, since that file *is* `7a6059a3`'s kernel.
 
-**The one-flag test has now been run — 2026-08-25, 4 × p5en, results below.** Both commits
-expose `--num-allocated-qps` / `--num-qps` in `tests/elastic/test_ep.py`; what changed is what
-the flag *means*. At `7a6059a3` the request is capped by the SM-derived context count
-(`nccl.cu:172-179` warns and overrides it down), so at 12 SM 5 was a ceiling and the 5→11
-direction was not reachable. At `ec623f3` the request **replaces** the default, bounded only
-by `[kMinGinContextCnt=2, kMaxGinContextCnt=17]` (`nccl.cu:129-137`).
+**Flag semantics differ between the two commits**, which matters if you try this on the
+pin. Both expose `--num-allocated-qps` / `--num-qps` in `tests/elastic/test_ep.py`, but at
+`7a6059a3` the request is capped by the SM-derived context count (`nccl.cu:172-179` warns
+and overrides it down), so at 12 SM 5 is a ceiling and 11 is unreachable. At `ec623f3` the
+request **replaces** the default, bounded only by
+`[kMinGinContextCnt=2, kMaxGinContextCnt=17]` (`nccl.cu:129-137`).
 
-The flag works — the header goes `#QPs: 11/11` → `#QPs: 5/5` and the debug line prints
-`5 / 49 / 5`, exactly 08-13's layout. Dispatch did **not** return to ~1504 µs:
+**Putting every 2-node prefill arm on one axis** (16 ranks, 12 SM, 8192 tok, all-rank means):
 
-| arm (2N, 16 ranks, 12 SM, 8192 tok, no `EP_BUFFER_DEBUG`) | dispatch | SO GB/s | wire% |
+| arm | dispatch | SO GB/s | wire% |
 |---|---|---|---|
-| pin `7a6059a3`, route B, `--skip-check` | 1513.9 / 1523.9 µs | 80.6 | 80.6 |
-| release `ec623f3`, default env | 1648–1663 µs | 74.0 | 74.0 |
-| release, `--num-allocated-qps 5` | 1631 / 1633 / 1637 µs | 75.0 | 75.0 |
-| release, `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` | **1500.2 µs** | 81.5 | 81.5 |
-| release, full 5-var route B | 1505.0 µs | 81.0 | 81.0 |
-| `main` `8e7b42e` + the type-5 pair | 1501.0 / 1502.0 µs | 81.0 | 81.0 |
+| release `ec623f3`, default env (type 2) | 1644.0 µs | 74.0 | 74.0 |
+| release, `--num-allocated-qps 5` (type 2) | 1631.1 µs | 75.0 | 75.0 |
+| pin `7a6059a3`, source stack, `--skip-check` | 1515.0 µs | 80.6 | 80.6 |
+| release, full 5-var route B | 1505.4 µs | 81.0 | 81.0 |
+| **release, `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0`** | **1502.9 µs** | 81.2 | 81.2 |
+| `main` `8e7b42e` + the type-5 pair | 1502.0 µs | 81.0 | 81.0 |
 
-`wire% = SO × (N−1)/N ÷ 50 GB/s`; at N=2 that is numerically SO. So the answer is: **the
-stack was the suspect all along, and specifically its GIN backend default** — not the QP
-fan-out and not `--skip-check`. Once both arms are on type 5 the *release* is marginally
-faster than the pin, and `main` is indistinguishable from the release. The remaining role of
-the QP layout is cached dispatch and combine, as noted above.
+`wire% = SO × (N−1)/N ÷ 50 GB/s`; at N=2 that is numerically SO. The two env vars account
+for the entire spread — the other three route-B vars add nothing on top of them, and
+`main` is indistinguishable from `ec623f3`. `OFI_NCCL_GIN_STRONG_SIGNAL=1` on its own is
+actively bad at 128 tok (750.4 µs mean, 32-rank spread 371–1130 µs), consistent with the
+unordered kernel only requiring weak signals.
 
-`OFI_NCCL_GIN_STRONG_SIGNAL=1` was in 08-13's environment; run as its own arm it is
-**1.1% worse** at 128 tok (371.1 vs 352.0 µs) and buys nothing on top of the type-5 pair —
-consistent with the unordered kernel only requiring weak signals.
+### Decode (`--num-tokens=128`) — two independent wins that stack
 
-### Decode (`--num-tokens=128`) — latency. The release is slow; two PRs are pending
+At this size only latency is meaningful: **5.6–6.4 MB per rank**. It is **message-rate**
+bound, not bandwidth bound, and there are two separate levers: the GIN backend (env only)
+and the dispatch part geometry (two pending PRs).
 
-At this size only latency is meaningful: **5.62–5.94 MB per rank** across the 16 ranks,
-5 GB/s SO / 16–17 GB/s SU. It is **message-rate** bound, not bandwidth bound.
+Both are measured on one image built from PR #2's head `b097b03`, which has PR #1 as an
+ancestor — so that single SHA *is* the "#1 + #2 stacked" arm.
 
-> ✅ **Answered 2026-08-25 — the PRs and the GIN backend switch are independent and
-> they STACK.** The concern was real: the table below is on the type-2 default
-> (367.0 → 166.1 µs with both PRs), but switching to `NCCL_GIN_TYPE=5` +
-> `NCCL_SYM_GIN_KERNELS_ENABLE=0` and changing *no code at all* already gives
-> **168.9 µs** — the same magnitude. Measured both together (image built from PR #2's
-> head `b097b03`, which has PR #1 as an ancestor, so one SHA is the stacked arm):
->
-> | 2N, 12 SM, 128 tok | type 2 | type 5 |
-> |---|---|---|
-> | `ec623f3` unpatched | 352.0 / 357.5 µs | 168.9 / 169.1 µs (**2.08×**) |
-> | #1 + #2, defaults | 243.9 / 248.4 µs (1.44×) | **113.5 / 112.8 µs (3.10×)** |
-> | #1 + #2 + `EP_NUM_SUB_PARTS=1` | — | **106.6 µs (3.30×)** |
-> | #1 + #2 + `EP_MIN_TOKENS_PER_PART=1` (clamp off) | — | 173.3 µs |
->
-> The clamp's *relative* effect is preserved almost exactly across backends: −30.7%
-> on type 2 (352.0 → 243.9) and −34.7% on type 5 (173.3 → 113.1). So the part-geometry
-> problem is not the backend problem, and the PR case is **strengthened**. `combine`
-> (164.2 µs) and `reduced combine` (180.9 µs) are untouched, as documented — the win
-> is dispatch-only. **One caveat: with the PRs applied, 12 SM beats 24 SM at 2-node
-> decode** (113.5 vs 147.2 µs), so the "24 SM for 2N decode" advice above applies to
-> unpatched code only.
-
-| op | release `ec623f3` | +[#2](https://github.com/amazon-contributing/DeepEP/pull/2) | +[#1](https://github.com/amazon-contributing/DeepEP/pull/1) and #2 |
-|---|---|---|---|
-| dispatch | 367.0 ± 12.1 µs | 239.8 ± 3.1 µs (**−34.7%**) | **166.1 ± 0.4 µs (−54.7%)** |
-| expanded dispatch | 366.1 ± 11.1 µs | 239.7 ± 1.9 µs (−34.5%) | 156.3 ± 0.9 µs (−57.3%) |
-| cached dispatch | 359.2 ± 10.1 µs | 235.7 ± 1.4 µs (−34.4%) | 150.8 ± 1.3 µs (−58.0%) |
-| combine | 178.1 ± 5.0 µs | 178.3 ± 2.2 µs (+0.1%) | 179.8 ± 1.2 µs (+0.9%) |
-| reduced combine | 196.9 ± 5.5 µs | 196.3 ± 2.8 µs (−0.3%) | 197.6 ± 1.2 µs (+0.4%) |
-
-dispatch + combine: **545 µs → 346 µs**. 3 reps, variants interleaved within each rep,
-each variant on its own `EP_JIT_CACHE_DIR`, 48/48 rounds rc=0.
-
-**The cause is degenerate part geometry at small batch, not EFA** — combine being exactly
-flat is the evidence. `kNumParts` (how many `flush_part` puts a channel's tokens leave in)
-is set only by `compute_part_allocation()`, which caps *from above* when the GIN
-indexed-signal budget is tight — and the budget is loosest precisely when a channel holds
-the fewest tokens. So decode always lands on `kMaxParts`, the worst end of the axis. At
-128 tokens / 12 SM a channel holds 3 tokens but is described as 4 parts × 1 token: the
-last part is always empty, and 3 tokens leave as three single-token puts instead of one
-3-token put. Sub-parts already have both guards parts lack (a clamp to `kBatchSize`, plus
-`EP_SM100_MIN_SUB_TOKENS`).
-
-| PR (base `main = ec623f3`) | What |
+| PR (base `main`) | What |
 |---|---|
-| [#1](https://github.com/amazon-contributing/DeepEP/pull/1) | Forward `EP_NUM_SUB_PARTS` / `EP_MIN_SUB_TOKENS` / `EP_SM100_MIN_SUB_TOKENS` to the JIT. Changes no default. |
+| [#1](https://github.com/amazon-contributing/DeepEP/pull/1) | Forward `EP_NUM_SUB_PARTS` / `EP_MIN_SUB_TOKENS` / `EP_SM100_MIN_SUB_TOKENS` / `EP_MIN_TOKENS_PER_PART` to the JIT. Changes no default. |
 | [#2](https://github.com/amazon-contributing/DeepEP/pull/2) | Add `kMinTokensPerPart` (default 15, `EP_MIN_TOKENS_PER_PART` overrides): `kNumParts = min(budget, tokens_per_channel / 15)`. |
 
-**Which to use.** Just bringing it up, or only care about prefill → take `main` as-is;
-both PRs are within ±2% on prefill, i.e. inside the noise. **Publishing decode /
-small-token numbers → cherry-pick them, or dispatch is 2.2× slower.** #1 alone is a wash
-(decode +1.8%, prefill −2.0%); it only pays stacked on #2. After they merge, #2's default
-of 15 applies automatically — no env var needed. To get the old geometry back as a control
-use `EP_MIN_TOKENS_PER_PART=1`, which **short-circuits** to the old value (dividing by 1
-is a *third* geometry, not a control).
+**2 nodes / 16 ranks / 12 SM, 128 tok** (all-rank means):
+
+| arm | dispatch | vs its own backend | combine | reduced combine |
+|---|---|---|---|---|
+| unpatched, type 2 | 365.1 µs | 1.00× | 175.0 µs | 192.4 µs |
+| #1 + #2, type 2 | 237.1 µs | **−35.1%** | 176.3 | 193.6 |
+| unpatched, type 5 | 169.4 µs | 1.00× | 162.7 | 179.0 |
+| #1 + #2, type 5 | 112.7 µs | **−33.5%** | 162.4 | 178.9 |
+| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **106.4 µs** | **−37.2%** | 162.2 | 178.9 |
+| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 171.5 µs | clamp-off control | 162.6 | 179.0 |
+
+**4 nodes / 32 ranks / 12 SM, 128 tok:**
+
+| arm | dispatch | vs its own backend | combine | reduced combine |
+|---|---|---|---|---|
+| unpatched, type 2 | 1001.2 µs | 1.00× | 343.3 µs | 350.7 µs |
+| #1 + #2, type 2 | 627.2 µs | **−37.4%** | 335.1 | 347.8 |
+| unpatched, type 5 | 184.5 µs | 1.00× | 243.6 | 253.5 |
+| #1 + #2, type 5 | 169.5 µs | **−8.1%** | 243.7 | 253.1 |
+| #1 + #2 + `EP_NUM_SUB_PARTS=1`, type 5 | **155.9 µs** | **−15.5%** | 243.9 | 251.7 |
+| #1 + #2 + `EP_MIN_TOKENS_PER_PART=1`, type 5 | 184.1 µs | clamp-off control | 243.3 | 253.1 |
+
+Three things to read off these:
+
+1. **The two levers are independent and they stack.** Stacked, 2-node decode dispatch goes
+   365.1 → 106.4 µs — **3.43×** — from one env pair and two commits.
+2. **combine and reduced combine are untouched to within 1% in every row.** That is the
+   evidence the PR mechanism is part geometry inside dispatch and not the network: EFA is
+   doing the same work either way. Expanded and cached dispatch track plain dispatch.
+3. **The clamp's win collapses at 4 nodes on type 5** — −8.1% instead of −33.5% — and the
+   clamp-off control (184.1 µs) sits inside noise of unpatched (184.5 µs), which confirms
+   it is the clamp that stopped paying rather than something else in the PRs. Type-5
+   4-node decode dispatch has a floor around **156–185 µs** that part geometry does not
+   reach; `EP_NUM_SUB_PARTS=1` gets furthest and no further. This is unexplained — do not
+   extrapolate the 2-node ratio to larger clusters.
+
+**Why part geometry costs anything at all.** `kNumParts` (how many `flush_part` puts a
+channel's tokens leave in) is set only by `compute_part_allocation()`, which caps *from
+above* when the GIN indexed-signal budget is tight — and the budget is loosest precisely
+when a channel holds the fewest tokens. So decode always lands on `kMaxParts`, the worst
+end of the axis. At 128 tokens / 12 SM a channel holds 3 tokens but is described as 4
+parts × 1 token: the last part is always empty, and 3 tokens leave as three single-token
+puts instead of one 3-token put. Sub-parts already have both guards parts lack (a clamp to
+`kBatchSize`, plus `EP_SM100_MIN_SUB_TOKENS`).
+
+**Which to use.** Only care about prefill → take `main` as-is; the PRs are within noise on
+prefill (2N/24 SM/8192: 1535.7 µs unpatched vs 1536.0 µs; 4N/12 SM/8192: 3955.3 vs 3955.0).
+**Publishing decode / small-token numbers → cherry-pick both**, and set the type-5 env pair
+regardless. #1 alone changes no default, so it only pays stacked on #2. After they merge,
+#2's default of 15 applies automatically — no env var needed. To get the unclamped geometry
+back as a control use `EP_MIN_TOKENS_PER_PART=1`, which **short-circuits** to the old value
+(dividing by 1 is a *third* geometry, not a control).
+
+**With the PRs applied, 12 SM beats 24 SM for 2-node decode dispatch** (112.7 vs 145.3 µs),
+so the 24-SM recommendation above holds for unpatched code. At 4 nodes the two tie on
+dispatch + reduced combine (422.6 vs 422.4 µs).
 
 ## Rules that decide whether a number is real
 
