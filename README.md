@@ -87,9 +87,9 @@ genuine tie; no bold at all means no arm is a defensible winner there. Near-ties
 called out in the prose, not by bold.
 **⭐ marks the fastest stack on that hardware among the rows the table's own config
 statement admits.** That admits the GDAKI row in the decode table (which already
-tolerates 256 experts) but **not** in the throughput table: no DeepEP V2 arm was
-ever run at 4096 tokens in any campaign, so its 8192-token FP8 cells cannot be
-starred against a 4096/BF16 column.
+tolerates 256 experts) but **not** in the throughput table: no GDAKI campaign ever
+ran 4096 tokens, so those 8192-token FP8 cells cannot be starred against a
+4096/BF16 column.
 
 ### Normal mode / "throughput" — RDMA bandwidth (per-rank effective)
 
@@ -108,15 +108,10 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 † **The `DeepEP V2 + GIN` row above is obsolete — do not quote it.** It is the
 CPU-proxy path from 2026-05. The GDAKI row replaces it and is **~30× the b300
 dispatch number** in the struck-through cell. Config differences you must carry:
-**no cell in the GDAKI row is 4096/BF16**, and no DeepEP V2 arm was run at 4096
-tokens in *any* campaign (the token counts on record are 128 / 512 / 1024 / 8192),
-while DeepEP V1 has no 8192-token run — so **V2-vs-V1 throughput is unmeasured in
-either direction on both p5en and b300**, which is why the GDAKI row is bolded
-inside its own group and carries no ⭐ even though 125 > 109.84. The b300 cells are
-**8192 tokens, FP8 dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8
-dispatch, 12 SM**
+**no cell in the GDAKI row is 4096/BF16** — the b300 cells are **8192 tokens, FP8
+dispatch, 24 SM** and the p5en cells are **8192 tokens, FP8 dispatch, 12 SM**
 (81.25 GB/s = 1504 µs dispatch, 65.75 = 3592 µs combine, 399.8 MB per rank,
-`results/p5en_ours_20260813/summary.txt`. **The released EFA 1.50.0 package reaches the same
+`results/p5en_ours_20260813/summary.txt`). **The released EFA 1.50.0 package reaches the same
 number without building anything from source, but only if you set two env vars**:
 `libnccl-net-ofi.so` registers both a proxy-assisted GIN backend (type 2) and
 `Libfabric_GDAKI` (type 5), and NCCL picks type 2 by default. With
@@ -127,7 +122,7 @@ all-rank means, 16 ranks, see
 The QP layout is not a lever: `--num-allocated-qps 5` moves plain 2-node prefill dispatch
 −0.8% on type 2 and +0.4% on type 5, i.e. the sign flips with the *backend*, not with node
 count; where it does cost something is cached dispatch (+9.6% on type 5) and 4-node decode
-dispatch, +19.3%: 1003.2 → 1197.0 µs), and
+dispatch, +19.3%: 1003.2 → 1197.0 µs. Finally,
 the GB/s is `test_ep.py`'s **SO** denominator. **SO counts intra-node destinations
 too, so halve it for a wire rate** — 125 GB/s SO = 62.5 GB/s of the 100 GB/s
 per-GPU wire. UCCL's `GB/s (RDMA)` in the row above uses the **same** denominator
@@ -141,6 +136,25 @@ methodology and per-row provenance for this table:
 `deepep-v2-efa-gdaki-b200/docs/b300_实测报告_zh.md` (🔒 local-only).
 **The UCCL-EP row is a same-stack re-check and reproduces within 5%**
 (4096 tok BF16: 94.42 vs 90.03 dispatch, 56.93 vs 58.99 combine).
+
+**Where 4096 and 8192 each come from** — because it decides what this table can and
+cannot conclude. **4096 is nobody's chosen shape**: it is both benches' argparse
+default (V1 `tests/test_internode.py:374` and V2 `tests/elastic/test_ep.py:577` are
+each `default=4096`), inherited by the 2026-05 launchers — `deepep-v1-efa/run_internode.sh`
+forwards no token count at all, while `uccl-ep-efa/run_internode.sh` and
+`deepep-v2-uccl-style/run_v2_prefill.sh` hard-code 4096. **8192/FP8 is a chosen
+shape**: it is upstream DeepEP V2's own published config (its README — 8K tokens per
+batch, 7168 hidden, top-8, FP8 dispatching, BF16 combining, "following V3's
+configuration") and it is what AWS's reference campaign ran (19 of 19 runs at
+`--num-tokens=8192`), which is what makes our GDAKI numbers comparable to both at
+once. **No GDAKI campaign ever ran 4096** — every GDAKI prefill arm is 8192 and every
+decode arm is 128, plus a decode-shape sweep at 1 / 8 / 32 / 512 / 1024. Since DeepEP
+V1 in turn has no 8192-token run, **V2-vs-V1 throughput is unmeasured in either
+direction on both p5en and b300**, which is why the GDAKI row is bolded only inside
+its own group and carries no ⭐ even though 125 > 109.84. The cheap way to close that
+is from the V1 side, not ours: V1 already publishes FP8 dispatch at 4096 (48.17 p5 /
+54.98 p5en, `deepep-v1-efa/README.md`), so **one V1 run at `--num-tokens 8192` with
+FP8 dispatch on the existing image** would make the two rows directly comparable.
 
 **B300 highlights**: First time on EFA we see >100 GB/s per-rank in
 both directions for V1 (≈ 2.5× upstream IB README's 43 GB/s). UCCL-EP

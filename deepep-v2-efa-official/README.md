@@ -662,6 +662,38 @@ dispatch + reduced combine (422.4 vs 422.2 µs).
    µs and state what the bytes figure counts — a GB/s-only table has inverted a conclusion
    for us before.
 
+## Not measured yet
+
+Ranked by what a reader would most likely want and what it costs. None of these
+needs an image rebuild.
+
+1. **DeepEP V1 at `--num-tokens 8192` with FP8 dispatch** (1 run, `deepep-v1-efa:dev`).
+   The repo's top-level throughput table puts V1 at 4096/BF16 next to DeepEP V2 at
+   8192/FP8, so those two rows cannot be compared in either direction: V1 has no
+   8192-token run and no GDAKI campaign ever ran 4096. V1 already publishes FP8
+   dispatch at 4096 (48.17 p5 / 54.98 p5en), so the missing arm is one run on the
+   V1 side, not a re-run of this campaign.
+2. **The 4-node `--num-sms` axis is open at the top** (2 runs: 4N/16 SM, 4N/32 SM).
+   At 2 nodes the axis is closed and has an *interior* optimum at 24 SM
+   (dispatch + reduced combine 4898.3 µs, vs 5062.9 at 32 SM). At 4 nodes only
+   6/12/24 exist and the curve is still monotone improving
+   (13549.4 → 11898.5 → 11701.0 µs), so the 24-SM recommendation for 4 nodes rests
+   on an unclosed axis.
+3. **No `--ignore-local-traffic` run at any scale** (2 runs: 2N, 4N). The launcher
+   has the hook (`IGNORE_LOCAL=1`, `run_test_ep.sh:124`) and every GB/s here is the
+   **SO** denominator, which counts intra-node destinations. `wire% = SO × (N−1)/N ÷ 50`
+   was checked exact against a measured run at **2 nodes only**; the ×0.75 factor at
+   4 nodes is arithmetic nobody has validated.
+4. **No 1-node baseline** (1 run). Everything here is ≥ 2 nodes, so DeepEP's own
+   kernel cost and the EFA crossing cost are never separated.
+5. **Which machine is the slow one in combine** (1 run with `NODE_RANK` swapped).
+   Combine and reduced combine layer by machine (13–17% at 2 nodes) and the slow
+   machine is fixed within a batch of reps but flips between batches; swapping the
+   leader role tells you whether it follows the machine or the role.
+6. **The thin 4-node arms** (a 3rd rep for the 4N rows). Most 4-node arms here are
+   1–2 reps against 3 at 2 nodes; rep-to-rep spread is ≤ 0.31% where measured, but
+   that is measured mostly at 2 nodes.
+
 ## Files
 
 | File | What |
