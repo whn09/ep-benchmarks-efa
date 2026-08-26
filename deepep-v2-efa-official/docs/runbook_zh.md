@@ -63,7 +63,17 @@ tar xzf aws-efa-installer-latest.tar.gz          # 约 650 MB（含所有发行�
 head -12 aws-efa-installer/ChangeLog.md          # 必须看到 ## [1.50.0]
 #   - Upgrade to rdma-core 64.0amzn0 / efa driver 3.3.0
 #   - Upgrade to Libfabric 2.6.0amzn1.0 / OFI NCCL Plugin 1.21.1
+
+# 看完 ChangeLog 立刻改成带版本号的名字，后面一律用这个名字
+mv aws-efa-installer-latest.tar.gz aws-efa-installer-1.50.0.tar.gz
 ```
+
+**`-latest` 这个 S3 key 不是固定版本，所以文件名也不能是。** 那个对象将来会变成
+1.51.0；如果 Dockerfile 的 `COPY` 里写着 `-latest`，同一份 Dockerfile 就会构出另一套栈，
+而镜像里没有任何东西记下这件事。所以 build context 要的是
+`aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz`（默认 `1.50.0`），并且镜像内部会
+`grep` 这个 tarball 自己的 `ChangeLog.md` 来核版本 —— 光改名只是把错误往后挪一格。
+通过的版本会记成 `EP_EFA_INSTALLER`。
 
 > ⚠️ **`-latest` 这个 key 不是固定版本。** 今天下到的是 1.50.0，下周可能是 1.51.0。
 > 要可复现就把下到的 tarball 连同它的 `ChangeLog.md` 版本号一起存档，别只存文件名。
@@ -119,23 +129,34 @@ zstd -dc "$(modinfo -n efa)" | strings | grep -c comp_cntr   # 期望 12，不�
 Dockerfile 见同目录 `Dockerfile`（已逐行核对过，见 §3.2）。
 
 ```bash
-mkdir -p ~/deepep-docker && cd ~/deepep-docker
-cp /path/to/aws-efa-installer-latest.tar.gz .     # 放进 build context，别在镜像层里重复下载
-cp /path/to/Dockerfile .
-docker build --progress=plain -t deepep-efa:1.50.0 .
+rsync -avz deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
+scp aws-efa-installer-1.50.0.tar.gz <node>:~/work/deepep-v2-efa-official/   # 不在 git 里
+ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
 ```
+
+`build_image.sh` 会 probe GPU 的 `compute_cap` 并据此推出 build 参数，tag 里带 arch
+（`deepep-v2-efa-official:sm90` / `:sm103`）。**别直接 `docker build`** —— 下表那两个参数
+不是可选的，而且其中一个是**晚炸**的。显式写法：`./build_image.sh sm103 [DEEPEP_REF] [TAG]`。
 
 约 **21.4 GB**（压缩后 7.7 GB），首次十几分钟。
 
-**默认只编 Hopper**（`TORCH_CUDA_ARCH_LIST=9.0`、CUDA 13.0.2），本文所有数字都是这一档。
-换 Blackwell 两个 build-arg 都得改，一个镜像只编一档：
-
-| 目标 | build 参数 |
+| 目标 | build 参数（`build_image.sh` 自动设） |
 |---|---|
-| p5en / H200，`sm_90` | *（默认）* |
-| p6-b300 / B300，`sm_103` | `--build-arg TORCH_CUDA_ARCH_LIST=10.3 --build-arg CUDA_VERSION=13.3.1` |
+| p5en / H200，`sm_90` | `TORCH_CUDA_ARCH_LIST=9.0  CUDA_VERSION=13.0.2` —— 本文所有数字 |
+| p6-b300 / B300，`sm_103` | `TORCH_CUDA_ARCH_LIST=10.3  CUDA_VERSION=13.3.1` |
+| B200，`sm_100` | `TORCH_CUDA_ARCH_LIST=10.0  CUDA_VERSION=13.3.1` —— 没跑过 |
 
-CUDA base 为什么也得动，见 §3.4。
+**一个镜像只编一档。** Hopper 的 cubin 在 Blackwell 上跑不了，`sm_103` 也不是 `sm_100`
+的向下兼容目标，而且 `9.0;10.3` 本来就要连 CUDA base 一起换（§3.4）。两个参数都会写进
+镜像的 `EP_BUILD_ARCH` / `EP_BUILD_CUDA`，`run_test_ep.sh` 启动前会和 host 对一遍，不
+一致直接拒绝跑 —— 否则这两种错都在离现场很远的地方才炸。
+
+第二条臂（`amazon-contributing/DeepEP` #1 + #2，#1 是 #2 head 的祖先，一个 ref 就是叠加）：
+
+```bash
+./build_image.sh sm103 5a594a5db2d1b7c45c60c82b0cf026e9440886a4
+# -> deepep-v2-efa-official:sm103-5a594a5   （run_campaign.sh 默认找的就是这个 tag）
+```
 
 ### 3.1 启动容器
 
@@ -428,6 +449,68 @@ python3 /opt/DeepEP/tests/elastic/test_pp.py          # pipeline 并行
 python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对照组）
 /opt/amazon/efa/bin/fi_pingpong -p efa [<对端私网IP>]  # 纯 libfabric 连通性，排除 DeepEP
 ```
+
+### 4.5 一条命令跑完整个 campaign（p5en 和 B300 同一套）
+
+`run_test_ep.sh` 是"一台机器上的一个 cell"。`run_campaign.sh` 从你的笔记本 ssh 驱动所有
+节点、按矩阵逐个 cell 跑、并把每个日志命名成 `results/*/make_tables.py` 能直接 pool 的
+形式。**两个架构用同一个脚本**，arch 只决定默认的 cell 列表。
+
+```bash
+# 1. 先降到单机 8 rank（reductive first）。B300 那两个坑都在这一步现形，2 分钟成本，
+#    而且能把"镜像编错了"和"网络起不来"分开。
+IMAGE=deepep-v2-efa-official:sm103 WORLD_SIZE=1 NUM_PROCESSES=8 \
+TOKENS=128 NUM_SMS=24 MASTER_PORT=8499 NCCL_DEBUG=INFO \
+  ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
+./verify_run.sh /tmp/smoke.node1.log
+
+# 2. campaign（arch 从 leader 探；也可以位置参数显式给 sm90 / sm103）
+NODES="<leader> <worker>" ./run_campaign.sh
+
+# 3. 把**每台**机器的日志都拉回来，先验收再看数
+for n in 1 2; do scp "<node$n>:~/epruns/*.node$n.log" ./logs/; done
+./verify_run.sh logs/*.log
+EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py
+```
+
+默认 cell（3 个 rep，**rep 内轮换**：每个 cell 每个 rep 各跑一次，不是按臂分块跑完再换，
+这样漂移不会被读成臂效应）：
+
+| arch | cells |
+|---|---|
+| `sm90` | `official` × {8192, 128} tok × {12, 24} SM；`prs` × {8192, 128} tok @ 12 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `sm103` | `official` × {8192 @ 24, 128 @ 24, 8192 @ 12}；`prs` × {8192, 128} @ 24 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+
+要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env"`，一行一个 cell。`prs` 那条臂的镜像
+不存在时会**整条跳过并打一行提示**，而不是让 9 个 run 一个一个失败。`sm103` 里那个 12 SM
+的 prefill cell 是为了和 §3.4 里那两个先于本 campaign 的点读对齐。
+
+**`prsmtpp1` 是负控，不是一个变体。** PR #2 在 `EP_MIN_TOKENS_PER_PART=1` 时短路回打
+patch 前的几何，所以那个 cell 是**新 binary 里的旧行为**。它要是没落回 `official` 臂，
+说明差异来自构建或环境，而不是 clamp。
+
+驱动脚本替你守住的东西，每一条都是踩过的：
+
+- **每个 cell 都带 `EXTRA_ENV="NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0"`**，并按有无
+  它在 tag 里写 `_gin5` / `_type2` —— 两种后端永远不可能被 pool 到一起。§6.1。
+- **每个 cell 换一个 `MASTER_PORT`**：被 kill 的 run 会留下 TCPStore listener，下一个卡在
+  rendezvous。
+- **每一个轴都进文件名**：arm、节点数、SM、tokens、knob、debug、后端、rep、node。少一个轴
+  就是静默覆盖掉另一条臂的日志。
+- **`EP_BUFFER_DEBUG` 全程不设**、`--ignore-local-traffic` 全程带、`--num-sms` 全程显式，
+  `NUM_SMS` 不用 0。
+- **前台 ssh，不用 `nohup`**：detached launch 在断管时是**不对称**失败的，活下来那边重启会
+  覆盖已发布的日志。
+- **cell 之间等 20 s**：`run_test_ep.sh` 会拒绝在忙 GPU 上启动 —— 上一轮残留的 rank 会让
+  下一轮以 `rc=0` 报出约 2 倍的延迟。
+- **不给 JIT cache 挂 host 目录**：每个 `--rm` 容器重新编（1–3 min，发生在 `test_ep.py`
+  自己的 warmup 里，不在计时区）。这个成本换来的是对 §7 规矩 1 那个坑的免疫。真要挂，就
+  **一个镜像 tag 一个 host 目录**。
+
+`verify_run.sh` 是验收闸门：丢 rank（先按**本机 local rank** 逐文件查，再按 tag 汇总对
+world）、B300 那两个坑的签名、tag 名和实际 env 不符 —— 这些是 FAIL；type-2 后端、
+`EP_BUFFER_DEBUG`、`--num-sms=0`、缺 `--ignore-local-traffic`、镜像没有 `BUILD_REF` 戳 ——
+这些是 WARN。**run 自己 `rc=0` 一条都不能证明。**
 
 ---
 
@@ -743,6 +826,23 @@ commit，它和 `ec623f3` 的 8 组配对全部落在 0.7% 以内（summary.txt 
 | `EP_JIT_CACHE_DIR` | `/root/.deep_ep` | 做 A/B 时**每个变体必须用不同目录**（见 §7） |
 | `EP_DISABLE_GIN` | `0` | 设 1 关掉 GIN，用来隔离问题 |
 
+镜像里还烧了三个只读的出处戳（`build_image.sh` 写入、`run_test_ep.sh` 读来做启动前检查）：
+`EP_BUILD_ARCH`（`TORCH_CUDA_ARCH_LIST`）、`EP_BUILD_CUDA`、`EP_EFA_INSTALLER`。
+和 host 的 `compute_cap` 不符时 launcher **直接拒绝启动**（`ALLOW_ARCH_MISMATCH=1` 可越过）——
+Hopper 的 cubin 在 Blackwell 上失败的位置离原因很远。
+
+launcher / driver 侧的旋钮（不是容器内的环境变量）：
+
+| 变量 | 用的值 | 说明 |
+|---|---|---|
+| `TOKENS` / `NUM_SMS` | `8192` / `128`；`12`、`24` | prefill 和 decode 只差 `TOKENS`。`NUM_SMS` **别用 0** —— auto 路径读**一块**网卡的速率（b300 上是真值的一半） |
+| `IGNORE_LOCAL` | `1` | 传 `--ignore-local-traffic`。不带的话 SO 分母含同机流量，会超过单卡线速，那就不是线速率 |
+| `TEST_FIRST_ONLY` | `1` | `--test-first-only` = FP8 dispatch @ `expert_alignment=128`（`enumerate_ep_modes()` 的第一项）。设 `0` 是跑整个模式笛卡尔积，几小时 |
+| `NODES` | `"<leader> <worker>"` | `run_campaign.sh` 的节点列表（ssh 别名或 IP），顺序即 `NODE_RANK` |
+| `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-5a594a5` | 两条臂的镜像 tag。`IMAGE_PRS` 不存在时 `prs` 那几个 cell **整条跳过**并打提示 |
+| `GIN_ENV` | 那对 GIN 变量（默认） | 置空即测 type-2 对照组；tag 里会相应写 `_type2` 而不是 `_gin5` |
+| `REPS` / `CELLS` / `PORT_BASE` / `LOGDIR` | `3` / arch 默认表 / `8500` / `~/epruns` | rep 在 cell 之间轮换；`CELLS` 一行一个 cell（`arm\|image\|tokens\|sms\|knobtag\|额外 env`） |
+
 `EP_HYBRID_KERNEL` 是这个 fork 的核心：Amazon 的 unordered kernel 用 in-band token header + counting signal 同步，不依赖投递顺序；上游 ordered kernel 依赖有序 RDMA write，在 EFA 的 SRD 乱序投递下不成立。选择发生在 JIT 生成期、变体名进生成源码的文件名，所以两种模式的 JIT 缓存天然互不干扰。（"EFA" 这个词在这个 fork 的代码和 README 里一次都没出现过 —— 对外只叫 "unordered delivery"。）
 
 **1.50.0 之后不再需要的东西**（一个都没设，`Libfabric_GDAKI (v14)` 照样加载）：`FI_EFA_USE_HW_CNTR=1`、`OFI_NCCL_GIN_STRONG_SIGNAL=1`、`NCCL_RMA_DISABLE=1`、NCCL `sym_kernels.cc` 的 GIN waiver 补丁、源码编 aws-ofi-nccl（`--enable-gdaki`）、`insmod` 自编 CE-capable `efa.ko`、`LD_PRELOAD` 顶掉 torch 的 NCCL。
@@ -842,7 +942,7 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 5. **combine 慢的那台机器到底跟机器还是跟角色**（1 次 run，把 `NODE_RANK` 对调）。combine / reduced combine 按机器分层（2 节点 13~17%），慢的那台在一批连续 rep 内固定、跨批会翻转；把 leader 角色换到另一台就能判定。
 6. **4 节点那几个臂太薄**（给 4N 的行补第 3 个 rep）。这里多数 4 节点臂只有 1~2 个 rep，2 节点是 3 个；rep 间离散度实测 ≤ 0.31%，但那主要是 2 节点上测的。
 7. **BF16 dispatch，任何 scale 都没测过**（要改 harness，不是加跑一次）。`run_test_ep.sh` 传的是 `--test-first-only`，而 `enumerate_ep_modes()`（`test_ep.py:33-41`）的第一项是 `use_fp8_dispatch=1, expert_alignment=128`。所以**本文每一个数字都是 FP8 dispatch @ alignment 128**；`test_ep.py` 没有单独选 BF16 的开关，`TEST_FIRST_ONLY=0` 是把整个模式笛卡尔积跑一遍（几小时）。目前唯一一个 BF16 读数来自 b300 那个 kit，显示 BF16 dispatch 是**更慢**的那一侧，所以这里的数字没有因为这个选择被美化 —— 但它仍然是一根没测的轴。
-8. **这个镜像在 `sm_103` 上的正式 campaign**（2 次 run：prefill + decode，3 个 rep，带 SM 轴）。b300 目前只有 §3.4 那个抽查，而成体系的 b300 数字来自另一个镜像，所以本文没有任何一行是可以跨架构比的。build 和 launcher 现在都已经支持 b300，缺的只是重建 + 照常扫一遍。
+8. **这个镜像在 `sm_103` 上的正式 campaign**（2 次 run：prefill + decode，3 个 rep，带 SM 轴）。b300 目前只有 §3.4 那个抽查，而成体系的 b300 数字来自另一个镜像，所以本文没有任何一行是可以跨架构比的。build 和 launcher 现在都已经支持 b300，剩下的就是每台机器 `./build_image.sh`（想同时跑 `prs` 臂就跑两次）然后 `NODES="<leader> <worker>" ./run_campaign.sh`（§4.5）—— `sm103` 的默认 cell 表里留了一个 12 SM 的 prefill cell，专门用来和 §3.4 的抽查对齐。
 
 ---
 

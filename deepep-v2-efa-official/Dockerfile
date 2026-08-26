@@ -46,11 +46,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    --no-verify        : 跳过 GPG（dev 包没签名）
 #    这里刻意不加 --skip-rdma-core：容器需要 rdma-core 64.0 的 libibverbs
 # ---------------------------------------------------------------------------
-COPY aws-efa-installer-latest.tar.gz /tmp/
-RUN apt-get update && cd /tmp && tar xzf aws-efa-installer-latest.tar.gz \
+#    The tarball is named by VERSION, not `-latest`. The dev bucket only publishes
+#    `aws-efa-installer-latest.tar.gz`, and that object will silently become 1.51.0
+#    some day: with a `-latest` filename in the COPY, the same Dockerfile would then
+#    build a different stack and nothing in the image would say so. Download it,
+#    check the ChangeLog, then rename to the version you checked (README 'Build').
+#    The grep below is the actual guard -- a rename alone only moves the mistake.
+ARG EFA_INSTALLER_VERSION=1.50.0
+ENV EP_EFA_INSTALLER=${EFA_INSTALLER_VERSION}
+COPY aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz /tmp/aws-efa-installer.tar.gz
+RUN apt-get update && cd /tmp && tar xzf aws-efa-installer.tar.gz \
+    && { grep -q "^## \[${EFA_INSTALLER_VERSION}\]" aws-efa-installer/ChangeLog.md \
+         || { echo "tarball is not EFA installer ${EFA_INSTALLER_VERSION}:" >&2; \
+              head -8 aws-efa-installer/ChangeLog.md >&2; exit 1; }; } \
     && cd aws-efa-installer \
     && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify \
-    && cd / && rm -rf /tmp/aws-efa-installer /tmp/aws-efa-installer-latest.tar.gz \
+    && cd / && rm -rf /tmp/aws-efa-installer /tmp/aws-efa-installer.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
 # installer 的 NGC 分支会顺带装 apt 的 libnccl2/libnccl-dev 2.28.3（并置成 hold）。
@@ -103,6 +114,13 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # 的性能无影响，只影响同一个 .so 里的 legacy kernel。
 ARG TORCH_CUDA_ARCH_LIST=9.0
 ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+# Stamp both build args into the image. A Hopper cubin does not run on Blackwell,
+# and the failure surfaces far from its cause, so run_test_ep.sh compares
+# EP_BUILD_ARCH against the host's compute_cap before it starts anything.
+# CUDA_VERSION is declared before FROM, so it has to be re-declared to be read here.
+ARG CUDA_VERSION
+ENV EP_BUILD_ARCH=${TORCH_CUDA_ARCH_LIST}
+ENV EP_BUILD_CUDA=${CUDA_VERSION}
 ENV EP_JIT_CACHE_DIR=/root/.deep_ep
 # DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法。
 #

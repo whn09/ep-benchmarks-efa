@@ -98,6 +98,35 @@ for dev in /dev/infiniband /dev/gdrdrv; do
   [ -e "$dev" ] || { echo "MISSING $dev -- see README 'Host prerequisites'." >&2; exit 1; }
 done
 
+# The image must be built for THIS GPU. A Hopper cubin on Blackwell (or the
+# reverse) does not fail here, it fails inside the test far from its cause, and on
+# sm_103 a CUDA-13.0.2-based image fails later still -- at the first dispatch,
+# in ptxas. Both are stamped into the image, so compare them up front.
+# ALLOW_ARCH_MISMATCH=1 to override (e.g. an image predating the stamping).
+if command -v nvidia-smi >/dev/null 2>&1; then
+  host_cc=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d ' ')
+  img_arch=$(docker run --rm --entrypoint printenv "${IMAGE}" EP_BUILD_ARCH 2>/dev/null || true)
+  img_cuda=$(docker run --rm --entrypoint printenv "${IMAGE}" EP_BUILD_CUDA 2>/dev/null || true)
+  if [ -z "$img_arch" ]; then
+    echo "WARNING: ${IMAGE} has no EP_BUILD_ARCH stamp (built before it existed);" \
+         "arch is unchecked." >&2
+  elif [ "$img_arch" != "$host_cc" ]; then
+    echo "REFUSING TO START: image built for arch '$img_arch', this host is '$host_cc'." >&2
+    echo "  Rebuild: ./build_image.sh   (it derives both build args from the GPU)" >&2
+    [ "${ALLOW_ARCH_MISMATCH:-0}" = "1" ] || exit 1
+  fi
+  # 13.0.x ptxas cannot assemble the >= sm_100 PTX in ptx.cuh. Only the major.minor
+  # matters, and the JIT uses the base image's nvcc, not torch's.
+  case "$host_cc" in
+    10.*) case "$img_cuda" in
+            13.0*|12.*|"") echo "REFUSING TO START: sm_10x needs a CUDA >= 13.3.x base," \
+                                "image has '${img_cuda:-unknown}'. It would build fine and" \
+                                "die in ptxas at the first dispatch." >&2
+                           [ "${ALLOW_ARCH_MISMATCH:-0}" = "1" ] || exit 1 ;;
+          esac ;;
+  esac
+fi
+
 # EP_NIC_NAME is PCI-derived so it differs per instance type (rdmap85s0 on p5en).
 # Pick the fastest rdmap* on THIS host instead of trusting the name in the image.
 if [ -z "${EP_NIC_NAME:-}" ]; then
@@ -145,9 +174,15 @@ if [ -z "${NCCL_IB_HCA:-}" ]; then
   done
 fi
 
-# EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms (e.g. the pre-1.50.0
-# route-B vars OFI_NCCL_GIN_STRONG_SIGNAL=1 / NCCL_GIN_TYPE=5). Deliberately NOT a
-# default: with the packaged 1.50.0 stack GDAKI loads without any of them.
+# EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms. It is how the
+#   NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0
+# pair is passed, and you almost always want that pair: 1.50.0 LOADS the GDAKI
+# plugin either way (`Loaded gin plugin Libfabric_GDAKI (v14)` prints in both arms)
+# but NCCL RUNS the type-2 Libfabric proxy backend unless type 5 is forced --
+# ~9% less prefill and 2.2-5.4x the decode latency. Set NCCL_GIN_TYPE=5 alone and
+# it crashes; both, or neither. Not baked in as a default so that the default arm
+# stays a measurable control. run_campaign.sh passes it and stamps `_gin5` into
+# the log name; a run without it gets `_type2`, so the two can never be pooled.
 EXTRA_ENV_ARGS=""
 for kv in ${EXTRA_ENV:-}; do EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS -e $kv"; done
 

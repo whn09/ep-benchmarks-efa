@@ -122,14 +122,21 @@ curl -O https://aws-efa-installer-dev.s3.amazonaws.com/aws-efa-installer-latest.
 tar xzf aws-efa-installer-latest.tar.gz            # ~650 MB, RPMs+DEBs for all distros
 head -12 aws-efa-installer/ChangeLog.md            # must say ## [1.50.0]
 
+# Rename to the version you just read, and use that name everywhere after this.
+mv aws-efa-installer-latest.tar.gz aws-efa-installer-1.50.0.tar.gz
+
 cd aws-efa-installer
 sudo ./efa_installer.sh -y --no-verify             # dev-bucket packages are unsigned
 sudo reboot                                        # swapping efa.ko requires it
 ```
 
-> ⚠️ The `-latest` S3 key is **not** a fixed version. Archive the tarball together with
-> its `ChangeLog.md` version if you need reproducibility; the filename alone tells you
-> nothing.
+> ⚠️ **The `-latest` S3 key is not a fixed version**, so the filename must not be
+> either. That object will become 1.51.0 one day; with `-latest` in the Dockerfile's
+> `COPY`, the same Dockerfile would then build a different stack and nothing in the
+> image would say so. The build context therefore wants
+> `aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz` (default `1.50.0`), and the
+> image asserts that the tarball's own `ChangeLog.md` agrees — a rename by itself
+> only moves the mistake. The accepted version is stamped as `EP_EFA_INSTALLER`.
 
 Verify after reboot:
 
@@ -156,20 +163,38 @@ freshly-rebooted instance in the same fleet can silently fall back to an older m
 
 ```bash
 rsync -avz deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
-scp aws-efa-installer-latest.tar.gz <node>:~/work/deepep-v2-efa-official/   # not in git
-ssh <node> "cd ~/work/deepep-v2-efa-official && docker build -t deepep-v2-efa-official:dev ."
+scp aws-efa-installer-1.50.0.tar.gz <node>:~/work/deepep-v2-efa-official/   # not in git
+ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
 ```
+
+`build_image.sh` probes the GPU's `compute_cap` and derives the build args from it;
+the tag it produces carries the arch (`deepep-v2-efa-official:sm90`, `:sm103`). Use it
+rather than a bare `docker build` — the two args below are not optional and one of
+them fails *late*. Explicit form: `./build_image.sh sm103 [DEEPEP_REF] [TAG]`.
 
 ~21.4 GB (7.7 GB compressed), ~15 min cold. The installer tarball must be in the build
 context; it is not committed here because of its size.
 
-**The defaults build for Hopper only** (`TORCH_CUDA_ARCH_LIST=9.0`, CUDA 13.0.2), which is
-what every number below was measured on. On Blackwell both args must change:
-
-| target | build args |
+| target | build args (what `build_image.sh` sets) |
 |---|---|
-| p5en / H200, `sm_90` | *(defaults)* |
-| p6-b300 / B300, `sm_103` | `--build-arg TORCH_CUDA_ARCH_LIST=10.3 --build-arg CUDA_VERSION=13.3.1` |
+| p5en / H200, `sm_90` | `TORCH_CUDA_ARCH_LIST=9.0  CUDA_VERSION=13.0.2` — every p5en number below |
+| p6-b300 / B300, `sm_103` | `TORCH_CUDA_ARCH_LIST=10.3  CUDA_VERSION=13.3.1` |
+| B200, `sm_100` | `TORCH_CUDA_ARCH_LIST=10.0  CUDA_VERSION=13.3.1` — not run here |
+
+**One arch per image.** A Hopper cubin does not run on Blackwell, `sm_103` is not a
+backward-compatible target of `sm_100`, and `9.0;10.3` would need two different CUDA
+bases anyway (next section). Both args are stamped into the image as `EP_BUILD_ARCH`
+and `EP_BUILD_CUDA`, and `run_test_ep.sh` refuses to start when either contradicts the
+host — the failures they cause otherwise surface far from their cause.
+
+A second arm for `amazon-contributing/DeepEP` [#1](https://github.com/amazon-contributing/DeepEP/pull/1)
+\+ [#2](https://github.com/amazon-contributing/DeepEP/pull/2) (#1 is an ancestor of #2's
+head, so one ref gives the stacked pair):
+
+```bash
+./build_image.sh sm103 5a594a5db2d1b7c45c60c82b0cf026e9440886a4
+# -> deepep-v2-efa-official:sm103-5a594a5   (the tag run_campaign.sh looks for)
+```
 
 One arch per image. Why the CUDA base has to move too, and the runtime env B300 also needs,
 are in *[B300 / `sm_103`](#b300--sm_103-two-blockers-not-in-the-p5en-path)*.
@@ -335,6 +360,71 @@ Check the NCCL version from that line or from `NCCL_DEBUG=INFO`'s
 `NCCL version 2.31.2+cuda13.3` — **not** from `torch.cuda.nccl.version()`, which reports
 torch's compile-time header (2.29.7) forever. There are **three** NCCL versions in the
 image; see the Chinese runbook's Appendix B.
+
+## A whole campaign in one command
+
+`run_test_ep.sh` is one cell on one node. `run_campaign.sh` drives every node over
+ssh, iterates the cells, and names each log so `results/*/make_tables.py` can pool it.
+Same script on both arches — the arch only selects the default cell list.
+
+```bash
+# 1. reductive first: one node, 8 ranks. Both b300 blockers appear here, and this
+#    separates "the build is wrong" from "the fabric is wrong" for 2 minutes of cost.
+IMAGE=deepep-v2-efa-official:sm103 WORLD_SIZE=1 NUM_PROCESSES=8 \
+TOKENS=128 NUM_SMS=24 MASTER_PORT=8499 NCCL_DEBUG=INFO \
+  ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
+./verify_run.sh /tmp/smoke.node1.log
+
+# 2. the campaign (arch probed from the leader; ARCH can also be given positionally)
+NODES="<leader> <worker>" ./run_campaign.sh
+
+# 3. pull every node's logs, then check before believing anything
+for n in 1 2; do scp "<node$n>:~/epruns/*.node$n.log" ./logs/; done
+./verify_run.sh logs/*.log
+EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py
+```
+
+Default cells (3 reps, rotated — every cell once per rep, not blocked per arm, so
+drift cannot be read as an arm effect):
+
+| arch | cells |
+|---|---|
+| `sm90` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `sm103` | `official` × {8192 @ 24, 128 @ 24, 8192 @ 12} ; `prs` × {8192, 128} @ 24 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+
+Override with `CELLS="arm|image|tokens|sms|knobtag|extra env"`, one per line. The `prs`
+arm is skipped with a message if its image is absent, rather than failing nine runs one
+at a time.
+
+**`prsmtpp1` is the control, not a variant.** PR #2 short-circuits to the pre-patch
+geometry when `EP_MIN_TOKENS_PER_PART=1`, so that cell is the old behaviour inside the
+*new* binary. If it does not land on the `official` arm, the difference came from the
+build or the environment and not from the clamp.
+
+What the driver enforces, all of it learned the expensive way:
+
+- **`EXTRA_ENV="NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0"` on every cell**, and
+  `_gin5` vs `_type2` in the tag so the two backends can never be pooled.
+- **A fresh `MASTER_PORT` per cell.** A killed run leaves a TCPStore listener behind and
+  the next one wedges in rendezvous.
+- **Every axis in the filename** — arm, nodes, SM, tokens, knob, debug, backend, rep,
+  node. A missing axis silently overwrites the other arm's log.
+- **`EP_BUFFER_DEBUG` never set**, `--ignore-local-traffic` always, `--num-sms` always
+  explicit, `NUM_SMS` never 0.
+- **Foreground ssh, no `nohup`.** A detached launch fails asymmetrically on a broken
+  pipe and the survivor's retry can overwrite a published log.
+- **20 s between cells**, because `run_test_ep.sh` refuses to start on a busy GPU —
+  leaked ranks from a previous run make the next one report ~2× the latency at `rc=0`.
+- **No host mount for the JIT cache.** Each `--rm` container recompiles (1–3 min, inside
+  `test_ep.py`'s own warmup, not in the timed region). That cost buys immunity to the
+  trap in rule 1 below. If you do mount one, it is one host directory *per image tag*.
+
+`verify_run.sh` is the acceptance gate: it FAILs on lost ranks (per file against
+*local* ranks, then pooled per tag against the world), on the two b300 blocker
+signatures, and on a tag whose name disagrees with the env it was run under; it WARNs
+on the type-2 backend, `EP_BUFFER_DEBUG`, `--num-sms=0`, a missing
+`--ignore-local-traffic`, and an image with no `BUILD_REF` stamp. `rc=0` from the run
+itself proves none of this.
 
 ## B300 / `sm_103`: two blockers not in the p5en path
 
@@ -789,15 +879,20 @@ needs an image rebuild.
 8. **This image on `sm_103`** — a real campaign (2 runs: prefill + decode, 3 reps, SM axis).
    B300 is only a spot check so far (see *B300 / `sm_103`*), and the numbers we quote in
    depth for b300 come from a different image, so nothing on this page is
-   architecture-comparable. With `CUDA_VERSION=13.3.1` + `TORCH_CUDA_ARCH_LIST=10.3` the
-   build and the launcher now handle b300, so this is a rebuild plus the normal sweep.
+   architecture-comparable. The build and the launcher now handle b300, so this is
+   `./build_image.sh` on each node (twice, if you want the `prs` arm) followed by
+   `NODES="<leader> <worker>" ./run_campaign.sh` — the `sm103` cell list exists and
+   includes a 12-SM prefill cell that lines up with the spot check above.
 
 ## Files
 
 | File | What |
 |---|---|
-| `Dockerfile` | The image. Pinned DeepEP commit; apt NCCL removed; `-L` for pip NCCL. |
-| `run_test_ep.sh` | Launcher. `TOKENS=8192` prefill / `TOKENS=128` decode; preflights a busy GPU and missing devices; auto-detects `EP_NIC_NAME`. |
+| `Dockerfile` | The image. Pinned DeepEP commit and EFA installer version; arch and CUDA are build args, stamped into the image; apt NCCL removed; `-L` for pip NCCL. |
+| `build_image.sh` | Build wrapper. Probes `compute_cap` → the two build args that must match the GPU; arch-stamped tag; optional `DEEPEP_REF` for a second arm. |
+| `run_test_ep.sh` | One cell on one node. `TOKENS=8192` prefill / `TOKENS=128` decode; preflights a busy GPU, missing devices, and an image built for another arch; auto-detects `EP_NIC_NAME` and `NCCL_IB_HCA`. |
+| `run_campaign.sh` | Multi-node driver: `NODES="<leader> <worker>" ./run_campaign.sh`. Arch-derived cell list, 3 rotated reps, a port per cell, every axis in the log name. |
+| `verify_run.sh` | Acceptance gate on the logs: lost ranks (per file, then pooled per tag), the two b300 blockers, mislabelled tags, type-2 backend, `EP_BUFFER_DEBUG`, missing provenance. `rc=0` from a run proves none of this. |
 | `ce_probe.c` | `ibv_create_comp_cntr` probe over every device — the decisive GDAKI check. `gcc -o ce_probe ce_probe.c -libverbs` |
 | `docs/runbook_zh.md` | Full Chinese runbook: install → build → test, env-var reference, ~30-row troubleshooting table. |
 | `results/p5en_2n4n_20260825/make_tables.py` | **Emits every table published here** from `logs/`. `python3 make_tables.py` and paste — do not hand-edit a table. Includes a completeness audit (0 of 69 run tags short a rank). |
