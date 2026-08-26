@@ -1,12 +1,24 @@
 # DeepEP v2 on AWS EFA — 安装、构建、跑分
 
-面向 `p5en.48xlarge`（8×H200，`sm_90`）×2 和 ×4。全部用已发布的包，不用编 NCCL、不用编 aws-ofi-nccl、不用换内核模块。
+**两种机型都支持**，同一份 Dockerfile、同一套脚本：
 
-四步：**host 装依赖 → build 镜像 → 跑 prefill 看带宽 → 跑 decode 看延迟**。
+| 机型 | GPU | arch | 每 GPU EFA | 每 GPU 线速 | 本文数字 |
+|---|---|---|---|---|---|
+| `p5en.48xlarge` | 8×H200 | `sm_90` | 1 张（共 16） | 50 GB/s | §5 全部（×2 和 ×4 节点） |
+| `p6-b300.48xlarge` | 8×B300 | `sm_103` | 2 张（共 16） | 100 GB/s | 只有 §3.4 的抽查，campaign 待跑（§8 待办 8） |
+
+差别集中在**两个 build 参数 + 一个运行时变量**，`build_image.sh` / `run_test_ep.sh` 会自己
+处理（机制和现象见 §3.4）；host 那一侧两种机型完全一样。B200 / `sm_100` 参数已就位但没跑过。
+
+全部用已发布的包，不用编 NCCL、不用编 aws-ofi-nccl、不用换内核模块。
+
+四步：**host 装依赖 → build 镜像 → 跑 prefill 看带宽 → 跑 decode 看延迟**；成体系地扫一遍
+是第五步，`run_campaign.sh` 一条命令（§4.5，两种机型共用）。
 
 所有版本判据和数字都是在真机上跑出来的（2026-08-25，4 台 p5en.48xlarge，installer 1.50.0 /
 `deep_ep 2.1.0+ec623f3`；每个数字都是**全 rank 均值** —— 2 节点 16 rank、4 节点 32 rank，
 原始日志和聚合脚本在 [`results/p5en_2n4n_20260825/`](../results/p5en_2n4n_20260825/)）。
+**§5 那些数字是 p5en 的，没有一行可以拿去当 b300 的读数** —— 反过来也一样。
 背景与"为什么"放在最后的附录，正文只留操作。
 
 **开跑之前先记住一件事：容器里必须多传两个环境变量**
@@ -31,17 +43,24 @@ prefill 慢 ~9%、decode 慢 2.2–5.4×。理由和数据见 §6。
 
 加粗的四个**全部由 EFA installer 1.50.0 提供** —— 这就是必须用 1.50.0 的原因（1.49.0 为什么不够见附录 A）。
 
+**两种机型的门槛完全一样，但 b300 出厂更远。** p6-b300 的出厂/DLAMI 镜像带的是 EFA
+1.47.0（efa.ko 3.0.0，`GinPlugin` 符号一个都没有），在 host 升到 1.50.0 之前 GDAKI 根本
+起不来 —— 而且 §3.4 那两个坑要等 GDAKI 起来之后才现形，所以顺序不能颠倒：**先升 host，
+再谈 arch**。
+
 GIN = GPU-Initiated Networking（NCCL Device API）；EFA 上的实现叫 `Libfabric_GDAKI`，走 `efa-direct` fabric 的 GDA ops，用硬件 completion counter（CE）承载 counting signal。
 
 ---
 
 ## 1. 实例前置条件（四条，缺一条都白干）
 
-1. **ENI 必须在创建实例时就 `InterfaceType=efa`** —— 事后打不开，只能重建。p5en 每张卡一个 EFA ENI，用 `NetworkCardIndex=0..15` 逐个指定；正常状态是 **16 个 EFA 设备**。
+1. **ENI 必须在创建实例时就 `InterfaceType=efa`** —— 事后打不开，只能重建。用 `NetworkCardIndex=0..15` 逐个指定；两种机型正常状态都是 **16 个 EFA 设备**，区别在每 GPU 摊到几张：p5en 1 张、b300 2 张。
    若 `lsmod | grep efa` 有模块但 `ibv_devinfo` 报 `No IB devices found`、`/dev/infiniband` 不存在 —— 就是这一条没做到。
 2. **安全组自引用放通全部流量**（入站 + 出站，Source/Destination = 该安全组自身）。EFA 不走 TCP 端口。
 3. **两台同 AZ + 同一个 cluster placement group。** 跨 AZ 会报 `ibv_create_ah failed with EINVAL ... Remote GID is in a different availability zone`。
-4. p5en 上设备名不是 `mlx5_0`、也不连号：`rdmap85s0 86s0 87s0 88s0 / 110s0 111s0 112s0 113s0 / 135s0 136s0 137s0 138s0 / 160s0 161s0 162s0 163s0`。
+4. **设备名不是 `mlx5_0`、也不连号**，而且两种机型 `ibv_devinfo -l` 的**总数不一样**：
+   - p5en：**16** 个，全是 EFA —— `rdmap85s0 86s0 87s0 88s0 / 110s0 111s0 112s0 113s0 / 135s0 136s0 137s0 138s0 / 160s0 161s0 162s0 163s0`。
+   - p6-b300：**18** 个 —— 16 个 `rdmap*`（EFA）**加** `ibp198s0f0` / `ibp199s0f0`，后两个**不是 EFA**（`ce_probe` 对它们是 CE FAIL / errno 95）。多出来这两个会让 NCCL 少建 GDAKI NIC，必须 `NCCL_IB_HCA=rdmap` 排掉（§3.4 坑 1）。所以"`ibv_devinfo -l` 数出 16"这条自检在 b300 上要读成"16 个 `rdmap*`"，不是"一共 16 个"。
 
 最省事的做法是 capacity block + 官方 DLAMI + cluster placement group，让模板把 16 张 EFA ENI 配好。
 
@@ -51,38 +70,35 @@ GIN = GPU-Initiated Networking（NCCL Device API）；EFA 上的实现叫 `Libfa
 
 ### 2.1 下载 installer
 
-`aws s3 cp` 在 CLI v2 上是坏的（HeadObject 拿 `301 Moved Permanently`，带 `--region` 也一样）。用：
+1.50.0 已经 GA，公共桶就有带版本号的 URL，**不需要改名**：
 
 ```bash
-curl -O https://aws-efa-installer-dev.s3.amazonaws.com/aws-efa-installer-latest.tar.gz
-# 或：aws s3api get-object --bucket aws-efa-installer-dev \
-#       --key aws-efa-installer-latest.tar.gz --no-sign-request --region us-east-1 \
-#       aws-efa-installer-latest.tar.gz
-
-tar xzf aws-efa-installer-latest.tar.gz          # 约 650 MB（含所有发行版的 RPM/DEB）
-head -12 aws-efa-installer/ChangeLog.md          # 必须看到 ## [1.50.0]
+curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz
+tar xzf aws-efa-installer-1.50.0.tar.gz          # 约 650 MB（含所有发行版的 RPM/DEB）
+head -6 aws-efa-installer/ChangeLog.md           # ## [1.50.0] - Aug 2026
 #   - Upgrade to rdma-core 64.0amzn0 / efa driver 3.3.0
 #   - Upgrade to Libfabric 2.6.0amzn1.0 / OFI NCCL Plugin 1.21.1
-
-# 看完 ChangeLog 立刻改成带版本号的名字，后面一律用这个名字
-mv aws-efa-installer-latest.tar.gz aws-efa-installer-1.50.0.tar.gz
 ```
 
-**`-latest` 这个 S3 key 不是固定版本，所以文件名也不能是。** 那个对象将来会变成
-1.51.0；如果 Dockerfile 的 `COPY` 里写着 `-latest`，同一份 Dockerfile 就会构出另一套栈，
-而镜像里没有任何东西记下这件事。所以 build context 要的是
-`aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz`（默认 `1.50.0`），并且镜像内部会
-`grep` 这个 tarball 自己的 `ChangeLog.md` 来核版本 —— 光改名只是把错误往后挪一格。
-通过的版本会记成 `EP_EFA_INSTALLER`。
+build context 那一份不用你操心：`build_image.sh` 发现本地没有
+`aws-efa-installer-1.50.0.tar.gz` 就自己去同一个 URL 下（所以每个节点各自从 S3 拉，比从
+你笔记本 scp 过去快得多，`rsync` 记得 `--exclude '*.tar.gz'`）。
 
-> ⚠️ **`-latest` 这个 key 不是固定版本。** 今天下到的是 1.50.0，下周可能是 1.51.0。
-> 要可复现就把下到的 tarball 连同它的 `ChangeLog.md` 版本号一起存档，别只存文件名。
+**文件名带版本号不是洁癖，是为了让镜像自己说得清用的是哪套栈。** 如果 Dockerfile 的
+`COPY` 写的是 `-latest`，那个对象哪天变成 1.51.0，同一份 Dockerfile 就会构出另一套栈，
+而镜像里没有任何东西记下这件事。版本会被核两遍（build 前在 `build_image.sh` 里、build 中
+在镜像里 `grep` tarball 自己的 `ChangeLog.md`），通过的版本记成 `EP_EFA_INSTALLER`。
+
+> 只有**还没 GA** 的版本才需要走 dev 桶那条老路 —— 那里只有浮动名字
+> `aws-efa-installer-latest.tar.gz`（这个 key 不是固定版本，今天是 1.50.0 下周可能是
+> 1.51.0），先看 `ChangeLog.md` 再改成你核过的版本号。dev 桶的包没 GPG 签名，所以
+> `efa_installer.sh` 要带 `--no-verify`。
 
 ### 2.2 安装（host 上**不要** `--skip-kmod`，我们要的就是 efa.ko 3.3.0）
 
 ```bash
 cd aws-efa-installer
-sudo ./efa_installer.sh -y --no-verify        # dev 桶的包没 GPG 签名，所以要 --no-verify
+sudo ./efa_installer.sh -y --no-verify        # 跳过 GPG 校验（dev 桶的包没签名；GA 的加着也无害）
 sudo reboot                                   # 换内核模块必须重启
 ```
 
@@ -96,8 +112,9 @@ export PATH=/opt/amazon/efa/bin:$PATH          # fi_info 默认不在 PATH 上
 cat /sys/module/efa/version                    # 3.3.0g
 lsmod | grep efa_nv_peermem                    # GDAKI 必需
 modinfo gdrdrv | grep ^version ; ls -l /dev/gdrdrv
-ibv_devinfo -l                                 # 16 个 rdmap*
+ibv_devinfo -l | grep -c rdmap                 # 16（b300 总行数是 18，多两个非 EFA 的 ibp*）
 fi_info | grep -c "fabric: efa-direct"         # 16
+nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1   # 9.0 / 10.3，决定 build 参数
 
 # COMP_CNTR capability 在 ABI 头里 —— 这才是 1.50.0 的真判据。
 # 头文件在 DKMS 源码树的 src/ 下面（不是 /usr/src/efa-*/ 的第一层）：
@@ -129,21 +146,21 @@ zstd -dc "$(modinfo -n efa)" | strings | grep -c comp_cntr   # 期望 12，不�
 Dockerfile 见同目录 `Dockerfile`（已逐行核对过，见 §3.2）。
 
 ```bash
-rsync -avz deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
-scp aws-efa-installer-1.50.0.tar.gz <node>:~/work/deepep-v2-efa-official/   # 不在 git 里
+rsync -avz --exclude '*.tar.gz' deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
 ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
 ```
 
 `build_image.sh` 会 probe GPU 的 `compute_cap` 并据此推出 build 参数，tag 里带 arch
 （`deepep-v2-efa-official:sm90` / `:sm103`）。**别直接 `docker build`** —— 下表那两个参数
 不是可选的，而且其中一个是**晚炸**的。显式写法：`./build_image.sh sm103 [DEEPEP_REF] [TAG]`。
+installer tarball 不在 build context 里的话它会自己下（§2.1）。
 
 约 **21.4 GB**（压缩后 7.7 GB），首次十几分钟。
 
 | 目标 | build 参数（`build_image.sh` 自动设） |
 |---|---|
-| p5en / H200，`sm_90` | `TORCH_CUDA_ARCH_LIST=9.0  CUDA_VERSION=13.0.2` —— 本文所有数字 |
-| p6-b300 / B300，`sm_103` | `TORCH_CUDA_ARCH_LIST=10.3  CUDA_VERSION=13.3.1` |
+| p5en / H200，`sm_90` | `TORCH_CUDA_ARCH_LIST=9.0  CUDA_VERSION=13.0.2` —— §5 所有数字 |
+| p6-b300 / B300，`sm_103` | `TORCH_CUDA_ARCH_LIST=10.3  CUDA_VERSION=13.3.1` —— 运行时还要 `NCCL_IB_HCA=rdmap`（自动注入），§3.4 |
 | B200，`sm_100` | `TORCH_CUDA_ARCH_LIST=10.0  CUDA_VERSION=13.3.1` —— 没跑过 |
 
 **一个镜像只编一档。** Hopper 的 cubin 在 Blackwell 上跑不了，`sm_103` 也不是 `sm_100`
@@ -165,7 +182,7 @@ docker run --rm -it \
   --gpus all --network host --ipc host --privileged --ulimit memlock=-1 \
   --device /dev/infiniband --device /dev/gdrdrv \
   -v /sys/class/infiniband:/sys/class/infiniband:ro \
-  deepep-efa:1.50.0 bash
+  deepep-v2-efa-official:sm90 bash            # b300 上是 :sm103
 ```
 
 - `--ulimit memlock=-1` 必须有（容器里跳过了 `limits.conf`），否则 RDMA 注册内存失败。
@@ -264,11 +281,13 @@ NCCL_LIB="$(python3 -c 'import nvidia.nccl,os;print(os.path.join(list(nvidia.ncc
 
 顺带说明为什么不用改 `EP_HYBRID_KERNEL`：默认就是 EFA 需要的 `unordered`，不用显式钉（真要钉也无害，见 §6）。
 
-### 3.4 B300 / `sm_103` 的两个坑（p5en 上不会出现）
+### 3.4 B300 / `sm_103` 比 p5en 多出来的两处（脚本已自动处理，但必须知道）
 
-别人照这份 runbook 在 2 × p6-b300 上起过一遍，撞到两个 p5en 复现不出来的失败。两个都靠
-build-arg / env 解决，不用改源码。**下面的现象和修复是他们实测的，机制是我在钉的那个
-DeepEP tree 上读出来的。**
+在 2 × p6-b300 上照这份 runbook 走会撞到两个 p5en 复现不出来的失败。两个都不用改源码：
+一个是 build 参数（`build_image.sh` 按 `compute_cap` 自动给），一个是运行时 env
+（`run_test_ep.sh` 按设备列表自动注入）。**现象和修复是实测的，机制是在钉的那个
+DeepEP tree 上读出来的。** 之所以还要在这里写清楚：这两个失败都在离原因很远的地方才炸，
+你迟早会在别的镜像、别的 launcher 上再见到它们。
 
 **坑 1：NCCL 只建了 2 个 GIN GDAKI NIC，rank 4 直接崩。**
 
@@ -315,6 +334,9 @@ RuntimeError: Assertion (csrc/jit/compiler.hpp:239): "NVCC compilation failed"
 **不是崩，而是偏低** —— `get_rdma_gbs` 只返回**一块**网卡的速率，而 b300 每 GPU 两张 EFA，
 真值 100 GB/s 它只看到 50。
 
+**这两处之外，b300 和 p5en 的流程一模一样** —— host 装法、GIN 那对环境变量、SM 要显式给、
+campaign 怎么扫（§4.5，`sm103` 的默认 cell 表已经在里面），全都不变。
+
 修完之后的抽查（2 节点 16 rank，`--num-tokens 8192`）：dispatch 12 SM ≈ **1025 µs**、
 combine 24 SM ≈ **1800 µs**。这是两个不同 SM 档上各一次读数，**不是 campaign** ——
 它只说明这套栈跑通了，不说明 B300 有多快。b300 上成体系的数字来自**另一个镜像**
@@ -360,7 +382,7 @@ docker run --rm --name ep \
   -e EP_BUFFER_DEBUG=1 \
   -e MASTER_ADDR=$MASTER -e MASTER_PORT=8371 \
   -e WORLD_SIZE=2 -e RANK=$NODE_RANK \
-  deepep-efa:1.50.0 \
+  deepep-v2-efa-official:sm90 \
   bash -lc "python3 -u /opt/DeepEP/tests/elastic/test_ep.py \
       --num-processes=8 --num-tokens=$TOKENS --hidden=7168 --num-topk=8 \
       --num-experts=256 --num-sms=12 --allow-hybrid-mode=1 \
@@ -395,7 +417,7 @@ ZeroDivisionError: float division by zero
 `num_qps < num_ranks` 在这个 pin 上也不致命：4 节点 32 rank 传 `--num-allocated-qps 5` 拿到
 `#QPs: 5/5`，照样跑完出数（§5.4）。所以 SM 可以放心扫。
 
-**推荐工作点：2 节点和 4 节点都用 24 SM。** 下表 8192 tok、GIN type 5、`--test-first-only`、
+**推荐工作点（p5en）：2 节点和 4 节点都用 24 SM。** 下表 8192 tok、GIN type 5、`--test-first-only`、
 未开 `EP_BUFFER_DEBUG`，全 rank 均值（完整数据见
 [`results/p5en_2n4n_20260825/summary.txt`](../results/p5en_2n4n_20260825/summary.txt) TABLE 5/6）：
 
@@ -419,6 +441,10 @@ ZeroDivisionError: float division by zero
   （181.2–184.7 µs，散布 1.9%），只有 reduced combine 动，24 SM 比 12 SM 好 5.4%
   （253.3 → 239.6 µs）。这条适用于未打 §5.5 那两个 PR 的代码；打了之后 2 节点 decode
   反而 12 SM 更好。
+- **这张表别搬到 b300 上。** SM 轴在本镜像的 `sm_103` 上还没扫过（§8 待办 8，`run_campaign.sh`
+  的 `sm103` cell 表就是为它准备的）；另一个镜像上的观测是打了 §5.5 的 clamp 之后 b300 的
+  SM 曲线是被**压平**（12 SM 和 24 SM 打平）而不是最优点移动，和 p5en 的形状不一样。
+  b300 默认起点取 24 SM，理由只是"和 p5en 的工作点对齐好比较"，不是量出来的最优点。
 
 ### 4.3 日志里必须出现的 GIN 证据
 
@@ -516,6 +542,10 @@ world）、B300 那两个坑的签名、tag 名和实际 env 不符 —— 这�
 
 ## 5. 实测结果（`p5en.48xlarge` × 2 和 × 4，2026-08-25）
 
+**本节全部是 p5en / `sm_90`。** b300 在本镜像上目前只有 §3.4 的抽查（两个 SM 档各一次读数），
+成体系的 b300 数字来自另一个镜像、在 `../adai-ep-comparison-b300/RESULTS_b300.md`，
+**和本节不同口径不能混排**；本镜像的 b300 campaign 是 §8 待办 8，跑法见 §4.5。
+
 环境：Ubuntu 24.04，driver 595.91.07，各 8×H200 + 16 EFA，同 AZ 同 cluster placement group，
 installer 1.50.0（production tarball，md5 `e5a5178944b1f1112f3b2eb3b15ca5a7`，efa.ko 3.3.0g）。
 容器 `deepep-efa:1.50.0`（torch 2.13.0+cu130 / nccl 2.31.2+cuda13.3 / `deep_ep 2.1.0+ec623f3`）。
@@ -537,8 +567,11 @@ installer 1.50.0（production tarball，md5 `e5a5178944b1f1112f3b2eb3b15ca5a7`�
   日志里**不打印** scale-out 字节，只能用 `SO × 时间` 反推。
 - `SO` **不是线速** —— `test_ep.py:253` 的循环在不加 `--ignore-local-traffic` 时会把
   本机也算作一个 scale-out 目的地，所以机内流量也计入。
-  **线速占比 = `SO × (N−1)/N ÷ 50 GB/s`**（p5en 每 GPU 50 GB/s = 16×200 Gb/s ÷ 8）；
-  N=2 时线速占比数值上等于 SO，N=4 时是 SO × 1.5。这个修正假设 N 个目的节点均分，
+  **线速占比 = `SO × (N−1)/N ÷ 每 GPU 线速`**。分母**按机型换**：p5en 是 **50 GB/s**
+  （16×200 Gb/s ÷ 8 = 每 GPU 一张 EFA），p6-b300 是 **100 GB/s**（每 GPU 两张）。
+  拿 50 去除 b300 的 SO 会得到约两倍的"线速占比"，这是最容易犯又最难发现的一个错。
+  p5en 上 N=2 时线速占比数值上等于 SO，N=4 时是 SO × 1.5（这个巧合来自分母恰好是 50）。
+  这个修正假设 N 个目的节点均分，
   是近似；要精确值就加 `--ignore-local-traffic` 重跑，`SO` 会直接变成真跨机字节 ÷ 时间。
 - 每 rank **scale-up**（= 打印的 `bytes`）字节，8192 tok：dispatch 2 节点 395.9–402.4 MB /
   4 节点 441.4–447.7 MB，combine 759.7–772.1 / 847.0–859.0 MB。128 tok：dispatch
@@ -973,15 +1006,19 @@ fi_info --version | head -3                       # 2.6.0amzn1.0
 dpkg -l | grep -E "libfabric|nccl-ofi|ibverbs"    # ofi-nccl 1.21.1 / rdma-core 64.0amzn0
 nm -D --defined-only /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep GinPlugin   # 必须有 v14
 nm -D --defined-only /lib/x86_64-linux-gnu/libibverbs.so.1 | grep -c comp_cntr      # 20
-ibv_devinfo -l ; fi_info | grep -c "fabric: efa-direct"                             # 16 / 16
+ibv_devinfo -l | grep -c rdmap ; fi_info | grep -c "fabric: efa-direct"             # 16 / 16
 python3 -c "import deep_ep, torch; print(deep_ep.__version__, torch.__version__)"
+printenv EP_BUILD_ARCH EP_BUILD_CUDA EP_EFA_INSTALLER                               # 这个镜像是给哪档编的
 ```
 
 `grep GinPlugin` 里没有 v14 = 插件是 1.20.0 或更老，后面全白跑。`comp_cntr` 为 0 = rdma-core 是 63.0。
 
+**数 `rdmap` 而不是数总行数**：b300 上 `ibv_devinfo -l` 一共 18 行（多两个非 EFA 的 `ibp*`，
+§1 第 4 条），照 "= 16" 去核会误判成坏节点。p5en 上两种数法结果相同。
+
 ### 一锤定音的 CE 探针
 
-GDAKI 的成败最终取决于 `ibv_create_comp_cntr` 这一个 verb。**在容器里**跑最有意义 —— 它同时验证 host 内核模块和容器里那份 rdma-core，正好是依赖链最底下两层。健康节点上 16 个 `rdmap*` 全部 `CE OK`。驱动状态是**每节点**的：同一批实例里刚重启的机器可能回到旧模块，某天忽然挂了先跑这个。
+GDAKI 的成败最终取决于 `ibv_create_comp_cntr` 这一个 verb。**在容器里**跑最有意义 —— 它同时验证 host 内核模块和容器里那份 rdma-core，正好是依赖链最底下两层。健康节点上 16 个 `rdmap*` 全部 `CE OK`；**b300 上另外那两个 `ibp*` 是 `CE FAIL` / errno 95，这是对的**（它们不是 EFA），别当成故障 —— 要处理的是让 NCCL 别选中它们（`NCCL_IB_HCA=rdmap`，§3.4）。驱动状态是**每节点**的：同一批实例里刚重启的机器可能回到旧模块，某天忽然挂了先跑这个。
 
 ```c
 /* ce_probe.c — gcc -o ce_probe ce_probe.c -libverbs */
@@ -1042,6 +1079,10 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null  # 两份，认清�
 | `only 2 GIN GDAKI NICs have been created` + `NCCL exception (nccl.cu:185): 5` | 混合 ibverbs 设备列表（b300 有 2 个非 EFA 的 `ibp*`）让 NCCL 少建了 GDAKI NIC | `NCCL_IB_HCA=rdmap`；`run_test_ep.sh` 已自动注入（§3.4） |
 | `Arguments mismatch for instruction 'mov'` → `ptxas fatal` → `compiler.hpp:239` | `sm_103` 命中 `ptx.cuh` 的 `__CUDA_ARCH__ >= 1000` 分支（`.v4.s64`），CUDA 13.0.2 的 ptxas 不认。第一次 dispatch 才炸 | 重建镜像：`--build-arg CUDA_VERSION=13.3.1`（§3.4）；没有宏能绕 |
 | 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题：`ec623f3` 上 `#QPs` 恒为 11、与 SM 无关，本仓库 6/12/16/24/32 SM 全部跑通（§4.2）。先查上一轮有没有漏进程 —— rc=0 也不代表干净 | `nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§7） |
+| `run_test_ep.sh` 报 `REFUSING TO START`（arch / CUDA 不匹配） | 镜像的 `EP_BUILD_ARCH` 和 host `compute_cap` 不符，或 `sm_10x` 上配了 < 13.3 的 CUDA base | 按 §3 表格重建（`./build_image.sh` 自己 probe）。确实要跨档跑再 `ALLOW_ARCH_MISMATCH=1` |
+| `ibv_devinfo -l` 数出 18 个设备（b300） | **正常**：16 个 EFA `rdmap*` + 2 个非 EFA `ibp*`（§1 第 4 条） | 自检改成 `grep -c rdmap`；运行时靠 `NCCL_IB_HCA=rdmap` 排掉 |
+| `ce_probe` 对 `ibp198s0f0` / `ibp199s0f0` 报 CE FAIL / errno 95 | **正常**，它们不是 EFA 设备 | 只看 16 个 `rdmap*` 是否全 `CE OK` |
+| b300 的"线速占比"算出来约 200% | 分母用了 p5en 的 50 GB/s；b300 每 GPU 两张 EFA = 100 GB/s | 换分母（§5 口径） |
 | `ibv_devinfo`: No IB devices found，但 `lsmod` 有 efa | 启动时 ENI 没开 EFA | 重建实例，`InterfaceType=efa` |
 | `fi_info -p efa-direct` → `-61 (No data available)` | **正常现象**，`-p` 匹配 provider（`efa`）不是 fabric | 用 `fi_info \| grep fabric` |
 | `fi_info: command not found` | 不在默认 PATH | `export PATH=/opt/amazon/efa/bin:$PATH` |

@@ -117,26 +117,23 @@ Four instance-level conditions, each of which is fatal on its own:
 Then install the EFA stack on **every** host:
 
 ```bash
-# aws s3 cp is broken for this bucket on CLI v2 (HeadObject -> 301, even with --region)
-curl -O https://aws-efa-installer-dev.s3.amazonaws.com/aws-efa-installer-latest.tar.gz
-tar xzf aws-efa-installer-latest.tar.gz            # ~650 MB, RPMs+DEBs for all distros
-head -12 aws-efa-installer/ChangeLog.md            # must say ## [1.50.0]
-
-# Rename to the version you just read, and use that name everywhere after this.
-mv aws-efa-installer-latest.tar.gz aws-efa-installer-1.50.0.tar.gz
-
+curl -O https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz
+tar xzf aws-efa-installer-1.50.0.tar.gz            # ~650 MB, RPMs+DEBs for all distros
+head -6 aws-efa-installer/ChangeLog.md             # ## [1.50.0] - Aug 2026
 cd aws-efa-installer
-sudo ./efa_installer.sh -y --no-verify             # dev-bucket packages are unsigned
+sudo ./efa_installer.sh -y --no-verify
 sudo reboot                                        # swapping efa.ko requires it
 ```
 
-> ⚠️ **The `-latest` S3 key is not a fixed version**, so the filename must not be
-> either. That object will become 1.51.0 one day; with `-latest` in the Dockerfile's
-> `COPY`, the same Dockerfile would then build a different stack and nothing in the
-> image would say so. The build context therefore wants
-> `aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz` (default `1.50.0`), and the
-> image asserts that the tarball's own `ChangeLog.md` agrees — a rename by itself
-> only moves the mistake. The accepted version is stamped as `EP_EFA_INSTALLER`.
+1.50.0 is GA, so the URL above is versioned and there is nothing to rename —
+`build_image.sh` fetches the same file for the build context on its own. The
+filename stays versioned because that is what makes the image self-describing: a
+`-latest` name in the Dockerfile's `COPY` would build a different stack the day that
+object becomes 1.51.0, with nothing in the image saying so. The version is checked
+twice, before the build and again inside it against the tarball's own `ChangeLog.md`,
+and stamped as `EP_EFA_INSTALLER`. If you ever need a version that is not GA yet, it
+exists only in the dev bucket under the floating `aws-efa-installer-latest.tar.gz`
+name — check its ChangeLog, then rename it to the version you read.
 
 Verify after reboot:
 
@@ -162,8 +159,7 @@ freshly-rebooted instance in the same fleet can silently fall back to an older m
 ## Build
 
 ```bash
-rsync -avz deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
-scp aws-efa-installer-1.50.0.tar.gz <node>:~/work/deepep-v2-efa-official/   # not in git
+rsync -avz --exclude '*.tar.gz' deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
 ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
 ```
 
@@ -172,8 +168,10 @@ the tag it produces carries the arch (`deepep-v2-efa-official:sm90`, `:sm103`). 
 rather than a bare `docker build` — the two args below are not optional and one of
 them fails *late*. Explicit form: `./build_image.sh sm103 [DEEPEP_REF] [TAG]`.
 
-~21.4 GB (7.7 GB compressed), ~15 min cold. The installer tarball must be in the build
-context; it is not committed here because of its size.
+It downloads the installer tarball into the build context itself if it is not already
+there (~650 MB; excluded from the rsync above and from git because of its size — each
+node fetching it from S3 beats pushing it over your laptop's uplink). ~21.4 GB image
+(7.7 GB compressed), ~15 min cold.
 
 | target | build args (what `build_image.sh` sets) |
 |---|---|

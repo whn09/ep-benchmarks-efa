@@ -53,24 +53,40 @@ if [ -n "$DEEPEP_REF" ]; then
 fi
 TAG="${TAG:-deepep-v2-efa-official:${ARCH}${NICK}}"
 
-# The build context wants a VERSION-named tarball, not `-latest`: the dev bucket's
-# `-latest` object will become 1.51.0 one day and the Dockerfile would then build a
-# different stack with no record of it. The version is asserted inside the image
-# against the tarball's ChangeLog.
+# The installer tarball (~650 MB) is fetched here, not committed. The public bucket
+# serves it under a VERSIONED name, so this needs no rename and no dev bucket:
+#   https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz
+# 1.50.0 was dev-bucket-only (`-latest`) when this kit was written and is now GA.
+# The filename still carries the version because that is what makes the image
+# self-describing: the version is checked here AND asserted inside the image
+# against the tarball's own ChangeLog, so a truncated or swapped file cannot
+# quietly become "the stack we measured".
 EFA_INSTALLER_VERSION="${EFA_INSTALLER_VERSION:-1.50.0}"
 TARBALL="aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz"
 if [ ! -f "$TARBALL" ]; then
-  echo "MISSING $TARBALL in the build context (~650 MB, deliberately not in git)." >&2
-  if [ -f aws-efa-installer-latest.tar.gz ]; then
-    got=$(tar xzOf aws-efa-installer-latest.tar.gz aws-efa-installer/ChangeLog.md 2>/dev/null \
-          | grep -m1 -o '^## \[[0-9.]*\]' || true)
-    echo "  Found aws-efa-installer-latest.tar.gz, ChangeLog says ${got:-<unreadable>}." >&2
-    echo "  If that is [$EFA_INSTALLER_VERSION]:  mv aws-efa-installer-latest.tar.gz $TARBALL" >&2
-  else
+  URL="https://efa-installer.amazonaws.com/$TARBALL"
+  echo "=== fetching $TARBALL (~650 MB) from $URL ==="
+  # -f so a 404 is an error instead of an HTML page saved as a tarball; download to
+  # a temp name so an interrupted transfer is not mistaken for a complete one next run.
+  if ! curl -fSL --retry 3 -o "$TARBALL.part" "$URL"; then
+    rm -f "$TARBALL.part"
+    echo >&2
+    echo "Could not fetch $URL." >&2
+    echo "If that version is not GA yet it only exists in the dev bucket under a" >&2
+    echo "floating name, which has to be renamed to the version you verified:" >&2
     echo "  curl -O https://aws-efa-installer-dev.s3.amazonaws.com/aws-efa-installer-latest.tar.gz" >&2
-    echo "  head -6 <(tar xzOf aws-efa-installer-latest.tar.gz aws-efa-installer/ChangeLog.md)" >&2
-    echo "  mv aws-efa-installer-latest.tar.gz $TARBALL      # only after checking the ChangeLog" >&2
+    echo "  tar xzOf aws-efa-installer-latest.tar.gz aws-efa-installer/ChangeLog.md | head -4" >&2
+    echo "  mv aws-efa-installer-latest.tar.gz $TARBALL   # only if the ChangeLog says it" >&2
+    exit 1
   fi
+  mv "$TARBALL.part" "$TARBALL"
+fi
+# Fail here rather than 15 minutes into the build.
+got=$(tar xzOf "$TARBALL" aws-efa-installer/ChangeLog.md 2>/dev/null \
+      | grep -m1 -o '^## \[[0-9.]*\]' || true)
+if [ "$got" != "## [$EFA_INSTALLER_VERSION]" ]; then
+  echo "$TARBALL is not installer $EFA_INSTALLER_VERSION (ChangeLog says '${got:-<unreadable>}')." >&2
+  echo "Delete it and re-run to re-download." >&2
   exit 1
 fi
 

@@ -46,12 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    --no-verify        : 跳过 GPG（dev 包没签名）
 #    这里刻意不加 --skip-rdma-core：容器需要 rdma-core 64.0 的 libibverbs
 # ---------------------------------------------------------------------------
-#    The tarball is named by VERSION, not `-latest`. The dev bucket only publishes
-#    `aws-efa-installer-latest.tar.gz`, and that object will silently become 1.51.0
-#    some day: with a `-latest` filename in the COPY, the same Dockerfile would then
-#    build a different stack and nothing in the image would say so. Download it,
-#    check the ChangeLog, then rename to the version you checked (README 'Build').
-#    The grep below is the actual guard -- a rename alone only moves the mistake.
+#    The tarball is named by VERSION, and `build_image.sh` fetches it from the public
+#    bucket's versioned URL (https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz)
+#    -- nothing to rename. The name is versioned so that the image is self-describing:
+#    a `-latest` filename here would build a different stack the day that object
+#    becomes 1.51.0, with nothing in the image saying so. The grep below is the real
+#    guard; the filename alone would only move the mistake.
 ARG EFA_INSTALLER_VERSION=1.50.0
 ENV EP_EFA_INSTALLER=${EFA_INSTALLER_VERSION}
 COPY aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz /tmp/aws-efa-installer.tar.gz
