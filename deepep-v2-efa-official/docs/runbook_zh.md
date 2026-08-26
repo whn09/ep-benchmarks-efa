@@ -172,15 +172,27 @@ zstd -dc "$(modinfo -n efa)" | strings | grep -c comp_cntr    # 期望 12
 
 ### 4.1 建
 
+每台机器上各 clone 一份、各建一次（镜像是本地的，没有 registry）：
+
 ```bash
-rsync -avz --exclude '*.tar.gz' deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
-ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
+git clone https://github.com/whn09/ep-benchmarks-efa.git ~/work/ep-benchmarks-efa
+cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official
+./build_image.sh
 ```
+
+**clone 到这个路径**：`~/work/ep-benchmarks-efa/deepep-v2-efa-official` 正是 §6 那个
+campaign 驱动脚本的 `REPO_DIR` 默认值。放别处也能跑，但 §6 要显式带上
+`REPO_DIR=<你的路径>`，否则它 ssh 进去 `cd` 一个不存在的目录。
 
 `build_image.sh` 会 probe `compute_cap`、据此设 build 参数、把 arch 写进 tag
 （`deepep-v2-efa-official:sm90` / `:sm103`），并在 build context 里没有 installer tarball 时
-自己从 §3.1 那个 URL 下一份（每台机器各自从 S3 拉，比从你笔记本 scp 650 MB 快得多）。
-显式写法：`./build_image.sh sm103 [DEEPEP_REF] [TAG]`。
+自己从 §3.1 那个 URL 下一份（tarball 有 650 MB，不进 git；每台机器各自从 S3 拉，比从
+你笔记本推过去快得多）。显式写法：`./build_image.sh sm103 [DEEPEP_REF] [TAG]`。
+
+> 只有在你本地改了这套脚本、想先试一把再提交时，才需要绕过 git 同步一次：
+> `rsync -avz --exclude '*.tar.gz' deepep-v2-efa-official/ <node>:~/work/ep-benchmarks-efa/deepep-v2-efa-official/`。
+> 别把它当常规路径 —— rsync 过去的目录 `git status` 是脏的，出了数字之后没法回答
+> "这是哪个 commit 跑出来的"。
 
 约 **21.4 GB**（压缩后 7.7 GB），冷启十几分钟。
 
@@ -217,9 +229,13 @@ PR head 会随 rebase 变，所以先用 `gh pr view` 取当前值再建。只�
 docker run --rm -it --gpus all --network host --ipc host --privileged --ulimit memlock=-1 \
   --device /dev/infiniband --device /dev/gdrdrv \
   -v /sys/class/infiniband:/sys/class/infiniband:ro \
+  -v "$PWD":/workspace \
   deepep-v2-efa-official:sm90 bash            # b300 上是 :sm103
 ```
 
+- `-v "$PWD":/workspace` 从 §4.1 那个 clone 目录里跑，容器的 `WORKDIR` 正是 `/workspace`，
+  §4.4 的 `ce_probe.c` 才能在容器里编。跑测试的 `run_test_ep.sh` **不挂**这个卷（它只需要
+  镜像里已经装好的 DeepEP）。
 - `--ulimit memlock=-1` **必须有**（容器里跳过了 `limits.conf`），否则 RDMA 注册内存失败。
 - `--device /dev/infiniband` 透 EFA 设备，`--device /dev/gdrdrv` 给 gdrcopy。
 - `--network host` 让多机直接互通；`--privileged` 跑通后可以收紧成 `--cap-add IPC_LOCK`。
@@ -382,9 +398,14 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 
 ## 6. 正式测量：一条命令跑完 campaign
 
-`run_test_ep.sh` 是"一台机器上的一个 cell"；`run_campaign.sh` 从你的笔记本 ssh 驱动所有
-节点，按矩阵逐个 cell 跑，并把日志命名成 `make_tables.py` 能直接汇总的形式。
+`run_test_ep.sh` 是"一台机器上的一个 cell"；`run_campaign.sh` 是驱动器：它 ssh 到每个节点，
+按矩阵逐个 cell 跑，并把日志命名成 `make_tables.py` 能直接汇总的形式。
 **两种机型同一个脚本**，arch 只决定默认 cell 列表。
+
+在**能 ssh 到所有节点**的那台机器上跑它（通常是你的笔记本，因为 `NODES` 用的是你
+`~/.ssh/config` 里的 alias；那台也需要一份 clone，但不需要 GPU、也不建镜像）。它在节点上
+只用 `REPO_DIR`（默认 `$HOME/work/ep-benchmarks-efa/deepep-v2-efa-official`，即 §4.1 那个
+clone）里的 `run_test_ep.sh`，不会往节点推代码。
 
 ```bash
 # arch 从 leader 探；也可以位置参数显式给 sm90 / sm103

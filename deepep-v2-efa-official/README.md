@@ -166,16 +166,25 @@ fi_info | grep -c "fabric: efa-direct"       # 16
 
 `ce_probe.c` in this directory is the one-shot decisive check — it exercises
 `ibv_create_comp_cntr`, the single verb GDAKI's success reduces to, and covers both the
-host kernel module and the container's rdma-core. Run it **inside the container**;
+host kernel module and the container's rdma-core. Run it **inside the container** — start
+a throwaway one from the checkout with `-v "$PWD":/workspace` (the image's `WORKDIR`), then
+`gcc -o /tmp/ce_probe /workspace/ce_probe.c -libverbs && /tmp/ce_probe`;
 healthy nodes print `CE OK` for all 16 `rdmap*`. Driver state is **per node** — a
 freshly-rebooted instance in the same fleet can silently fall back to an older module.
 
 ## Build
 
+Clone and build on each node — the image is local, there is no registry:
+
 ```bash
-rsync -avz --exclude '*.tar.gz' deepep-v2-efa-official/ <node>:~/work/deepep-v2-efa-official/
-ssh <node> "cd ~/work/deepep-v2-efa-official && ./build_image.sh"
+git clone https://github.com/whn09/ep-benchmarks-efa.git ~/work/ep-benchmarks-efa
+cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official
+./build_image.sh
 ```
+
+**Clone to that path.** `~/work/ep-benchmarks-efa/deepep-v2-efa-official` is
+`run_campaign.sh`'s `REPO_DIR` default; anywhere else works but the campaign then needs
+an explicit `REPO_DIR=<your path>` or it `cd`s into a directory that does not exist.
 
 `build_image.sh` probes the GPU's `compute_cap` and derives the build args from it;
 the tag it produces carries the arch (`deepep-v2-efa-official:sm90`, `:sm103`). Use it
@@ -183,9 +192,13 @@ rather than a bare `docker build` — the two args below are not optional and on
 them fails *late*. Explicit form: `./build_image.sh sm103 [DEEPEP_REF] [TAG]`.
 
 It downloads the installer tarball into the build context itself if it is not already
-there (~650 MB; excluded from the rsync above and from git because of its size — each
-node fetching it from S3 beats pushing it over your laptop's uplink). ~21.4 GB image
-(7.7 GB compressed), ~15 min cold.
+there (~650 MB, gitignored because of its size — each node fetching it from S3 beats
+pushing it over your laptop's uplink). ~21.4 GB image (7.7 GB compressed), ~15 min cold.
+
+If you are iterating on local edits to these scripts, `rsync -avz --exclude '*.tar.gz'
+deepep-v2-efa-official/ <node>:~/work/ep-benchmarks-efa/deepep-v2-efa-official/` gets
+them there without a commit — but keep it the exception: an rsynced checkout has a dirty
+`git status`, so a number produced from it cannot be attributed to a commit.
 
 | target | build args (what `build_image.sh` sets) |
 |---|---|
@@ -272,8 +285,8 @@ on the default backend, inside that arm's across-rep spread (§ Results).
 
 ```bash
 # worker first, then leader; only NODE_RANK differs
-ssh <worker> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 1 <leader-ip>" &
-ssh <leader> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 0 <leader-ip>"
+ssh <worker> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 1 <leader-ip>" &
+ssh <leader> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 0 <leader-ip>"
 ```
 
 `TOKENS=8192` → prefill (report **bandwidth**). `TOKENS=128` → decode (report
