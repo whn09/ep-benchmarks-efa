@@ -11,7 +11,26 @@
 #     -> ibv_*_comp_cntr     : rdma-core 64.0
 #     -> COMP_CNTR cap       : efa.ko 3.3.0            [host]
 
-FROM nvidia/cuda:13.0.2-devel-ubuntu24.04
+# CUDA 版本只决定 **ptxas / nvcc**（torch 那份 wheel 是 cu130，CUDA 次版本兼容，
+# 换 base 不用换 wheel）。JIT 用的是 base 里的 nvcc，不是 wheel 里的。
+#
+# H200 / sm_90 用 13.0.2 就够。**B300 / sm_103 必须 >= 13.3.x**：
+# `deep_ep/include/deep_ep/common/ptx.cuh` 有多处 `#if __CUDA_ARCH__ >= 1000`
+# （`:106` 的 `st.bulk`、`:229` 起的 `.v4.s64` LD/ST，形如
+# `ld.L1::no_allocate...global.nc.v4.s64 {4 个 64 位寄存器}`）；sm_103 = 1030 会进这些
+# 分支，而 13.0.2 的 ptxas 在汇编生成出来的 PTX 时报
+#   `line NNN; error : Arguments mismatch for instruction 'mov'` -> `ptxas fatal`
+# -> `Assertion (csrc/jit/compiler.hpp:239): "NVCC compilation failed"`，
+# 在第一次 dispatch（JIT 触发点）时才炸，build 阶段看不出来。
+# 13.3.1 的 ptxas 接受这些形式。实测：b300 上换 base 后 dispatch/combine 正常出数。
+#
+# 这个坑**没有宏可以绕**：`DISABLE_AGGRESSIVE_PTX_INSTRS` 在 V2 的 impls/*.cuh 里
+# 零处引用（只有 `csrc/kernels/legacy/utils.cuh` 读它，那是 V1 的路径），而且
+# `compiler.hpp` 构造 flags 时只处理 EP_JIT_CPP_STANDARD / EP_NUM_TOPK_IDX_BITS 那几个，
+# `EP_JIT_EXTRA_FLAGS` 在源码里还是 TODO —— 没有给 JIT 传 flag 的入口。
+# setup.py 对 arch != 9.0 加的那个 -D 只作用于 AOT 的 _C.so，JIT 拿不到。
+ARG CUDA_VERSION=13.0.2
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -72,7 +91,18 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 # ---------------------------------------------------------------------------
 # 4) DeepEP（amazon-contributing fork，含 EFA 所需的 unordered kernels）
 # ---------------------------------------------------------------------------
-ENV TORCH_CUDA_ARCH_LIST=9.0
+# 9.0 = Hopper（p5en / H200，本目录所有数字都是这一档）；
+# 10.0 = B200 sm_100；10.3 = B300 sm_103（p6-b300）。
+# 必须是 ARG 而不是写死的 ENV：sm_103 不是 sm_100 的向下兼容目标，Hopper 的
+# cubin 和 PTX 在 Blackwell 上都跑不了，所以换硬件必须重编。b300 上用
+# `--build-arg TORCH_CUDA_ARCH_LIST=10.3`。
+# 建议一个镜像一档，别写 `9.0;10.3`：sm_103 要求 CUDA_VERSION >= 13.3.x（见文件头），
+# 所以"一个镜像通吃两代"本来就得连 base 一起换。另外 `setup.py:148` 在这个字符串不
+# **恰好等于** `9.0` 时会强制 `DISABLE_AGGRESSIVE_PTX_INSTRS=1` —— 那个宏只有
+# `csrc/kernels/legacy/utils.cuh`（V1 路径）读，V2 的 impls 一处都不读，所以对 v2
+# 的性能无影响，只影响同一个 .so 里的 legacy kernel。
+ARG TORCH_CUDA_ARCH_LIST=9.0
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
 ENV EP_JIT_CACHE_DIR=/root/.deep_ep
 # DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法。
 #
@@ -110,9 +140,14 @@ RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
 # ---------------------------------------------------------------------------
 # EFA 上网卡名不是 mlx5_0，DeepEP 用它查网卡属性。
 # 实际名字用 `ibv_devinfo -l` 查，启动容器时按需覆盖。
-# 注意：它只喂给 get_rdma_gbs()，而那条路在 EFA 上必失败（走 ibstat，
-# ibstat 看不到 EFA 设备）。所以跑多机时 test_ep.py 必须显式给 --num-sms，
-# 否则 get_theoretical_num_sms() 会 ZeroDivisionError。
+# 注意：它只喂给 get_rdma_gbs()。**这条路在本 Dockerfile 默认钉的 8e7b42e 上是通的**
+# ——`envs.py:306` 先读 `/sys/class/infiniband/<nic>/ports/*/rate`，`ibstat`（EFA 上必
+# 失败）只是 fallback，全失败时抛的是带修复建议的 RuntimeError 而不是
+# ZeroDivisionError。runbook §4.2 里那段 ZeroDivisionError 只对旧 pin ec623f3 成立。
+# 但它返回的是**一块**网卡的速率：p5en 每 GPU 1 张 EFA（=50 GB/s，正好），
+# p6-b300 每 GPU 2 张（真值 100 GB/s，自动探测只看到一半）。所以 `--num-sms` 仍然
+# 建议显式给 —— 理由是可复现和 b300 上探测值偏低，不是会崩。
+# 前提：容器要能看到 sysfs（run_test_ep.sh 挂了 /sys/class/infiniband:ro）。
 ENV EP_NIC_NAME=rdmap85s0
 # installer 在容器里会走 NGC 分支，插件落成 libnccl-net-ofi.so，
 # 所以这里用 NCCL 的名字解析（`ofi` -> libnccl-net-ofi.so）而不是写死全路径。

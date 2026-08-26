@@ -11,17 +11,27 @@
 #
 # Env:
 #   TOKENS=8192      8192 = prefill (report bandwidth), 128 = decode (report latency).
-#   NUM_SMS=12       MUST be explicit on EFA: --num-sms 0 routes through ibstat,
-#                    which cannot see EFA devices, and dies with ZeroDivisionError
-#                    in get_theoretical_num_sms(). Also NOT freely tunable -- it
-#                    changes the allocated QP count non-monotonically and a value
-#                    landing on num_qps < num_ranks hangs. Known-good: 12 on 2
-#                    nodes, 6 on 4 nodes.  See docs/runbook_zh.md 4.2.
+#   NUM_SMS=12       Pass it explicitly. At the image's pinned DeepEP (8e7b42e)
+#                    --num-sms 0 does NOT crash -- get_rdma_gbs reads
+#                    /sys/class/infiniband/<nic>/ports/*/rate first and only falls
+#                    back to ibstat (the ZeroDivisionError in docs/runbook_zh.md
+#                    4.2 is the older ec623f3 pin). But it reports ONE device's
+#                    rate: correct on p5en (1 EFA per GPU = 50 GB/s), half the
+#                    truth on p6-b300 (2 per GPU = 100 GB/s). It is also NOT freely
+#                    tunable -- it changes the allocated QP count non-monotonically
+#                    and a value landing on num_qps < num_ranks hangs. Known-good:
+#                    12 on 2 p5en nodes, 6 on 4; 24 on 2 p6-b300 nodes.
 #   MASTER_PORT      use a DIFFERENT port per repetition: a killed run leaves a
 #                    TCPStore listener behind and the next one wedges in rendezvous.
-#   EP_MIN_TOKENS_PER_PART / EP_NUM_SUB_PARTS
-#                    decode part-geometry knobs. Need amazon-contributing/DeepEP
-#                    PR #1 + #2; without them decode dispatch is ~2.2x slower.
+#   EP_MIN_TOKENS_PER_PART / EP_NUM_SUB_PARTS / EP_MIN_SUB_TOKENS /
+#   EP_SM100_MIN_SUB_TOKENS
+#                    decode part-geometry knobs, all four forwarded to the JIT by
+#                    amazon-contributing/DeepEP PR #1. Without #1 they are silently
+#                    inert; without #2 decode dispatch is ~1.5x (p5en) to ~1.6x
+#                    (b300) slower. Reaching them by editing the header instead of
+#                    the env is unsafe: the JIT cache key hashes `flags` but NOT
+#                    included header content, so an env-free header patch can serve
+#                    a stale cubin.  See README 'Rules that decide ...' rule 1.
 #   IGNORE_LOCAL=1   pass --ignore-local-traffic, so the reported scale-out GB/s
 #                    is a wire rate. WITHOUT it, SO includes intra-node traffic
 #                    and can exceed p5en's 50 GB/s per-GPU wire.
@@ -35,7 +45,15 @@
 #                    claimed -- but it is asymmetric across launchers, so an arm
 #                    that sets it is not comparable to one that does not. Use it
 #                    to confirm the layout, then turn it OFF for anything you publish.
+#   NCCL_IB_HCA      auto-set to `rdmap` when this host also has non-EFA ibverbs
+#                    devices (p6-b300 does); without it NCCL creates only 2 GIN
+#                    GDAKI NICs and rank 4+ dies. See the block below.
+#   TEST_FIRST_ONLY=1  0 runs the whole ep-mode product (hours), not just BF16.
 #   IMAGE, WORLD_SIZE, NUM_PROCESSES, EP_NIC_NAME, NCCL_DEBUG, EXTRA_ENV
+#
+# Hardware note: the image must be built for THIS GPU's arch, and on p6-b300 that
+# also means a newer CUDA base -- `--build-arg TORCH_CUDA_ARCH_LIST=10.3
+# --build-arg CUDA_VERSION=13.3.1`. See the Dockerfile header.
 set -euo pipefail
 
 NODE_RANK="${1:?node rank (0=leader, 1=worker)}"
@@ -48,6 +66,18 @@ MASTER_PORT="${MASTER_PORT:-8371}"
 NUM_PROCESSES="${NUM_PROCESSES:-8}"
 NUM_SMS="${NUM_SMS:-12}"
 TOKENS="${TOKENS:-8192}"
+# --test-first-only stops after the FIRST entry of enumerate_ep_modes(), which at
+# this pin (test_ep.py:33-41) is do_handle_copy=1, expert_alignment=128,
+# use_fp8_dispatch=1, num_bias=0, with_previous_event=0, async_with_compute_stream=0,
+# allocate_on_comm_stream=0. So every number this repo publishes is *FP8 dispatch at
+# alignment 128* -- there is no flag to select BF16 dispatch on its own, and
+# TEST_FIRST_ONLY=0 runs the whole 2x2x2x3x... product (hours), not just BF16.
+TEST_FIRST_ONLY="${TEST_FIRST_ONLY:-1}"
+# "0" must disable it, so test the value -- ${VAR:+...} would keep passing the flag.
+# `if`, not `[ ] && VAR=`: under `set -e` a false test as the last command of the
+# line exits the script.
+FIRST_ONLY_ARG=""
+if [ "$TEST_FIRST_ONLY" != "0" ]; then FIRST_ONLY_ARG="--test-first-only"; fi
 NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 
 # --- preflight -------------------------------------------------------------
@@ -80,7 +110,39 @@ if [ -z "${EP_NIC_NAME:-}" ]; then
       if [ "${r:-0}" -gt "$best_rate" ]; then best_rate=$r; best=$(basename "$n"); fi
     done
   done
-  [ -n "$best" ] && EP_NIC_NAME="$best" && echo "=== EP_NIC_NAME=$best (auto, ${best_rate} Gb/s) ==="
+  # Not `[ -n "$best" ] && ...`: under `set -e` that exits the script with no
+  # message on a host where no rdmap* device is visible.
+  if [ -n "$best" ]; then
+    EP_NIC_NAME="$best"
+    echo "=== EP_NIC_NAME=$best (auto, ${best_rate} Gb/s) ==="
+  else
+    echo "WARNING: no readable /sys/class/infiniband/rdmap*/ports/*/rate;" \
+         "falling back to the image's EP_NIC_NAME." >&2
+  fi
+fi
+
+# NCCL picks the GIN GDAKI NICs itself, and on a host whose ibverbs device list is
+# MIXED it under-creates them: p6-b300 shows 18 devices (16 rdmap* EFA + the two
+# non-EFA ibp198s0f0 / ibp199s0f0, which fail ce_probe with errno 95), and NCCL
+# built only 2 GDAKI NICs -- so rank 4 asking for its own NIC dies with
+#   NET/IB : Requested properties for GIN GDAKI NIC 4, only 2 GIN GDAKI NICs
+#   ...  RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:185): 5
+# One GDAKI NIC per local rank (8/node) is what ElasticBuffer needs. Restricting
+# NCCL to the EFA devices by prefix fixes it; the log then reads
+#   NET/Libfabric_GDAKI : GPU Direct RDMA Enabled for HCA 0..7 'rdmap*'
+# p5en has 16 pure rdmap* devices, so it never trips this and needs no default.
+# Only inject when a non-rdmap device is actually present -- a blanket default
+# would silently mask a host where the EFA devices are named something else.
+if [ -z "${NCCL_IB_HCA:-}" ]; then
+  for n in /sys/class/infiniband/*; do
+    [ -d "$n" ] || continue
+    case "$(basename "$n")" in
+      rdmap*) ;;
+      *) NCCL_IB_HCA=rdmap
+         echo "=== NCCL_IB_HCA=rdmap (auto: non-EFA ibverbs device $(basename "$n") present) ==="
+         break;;
+    esac
+  done
 fi
 
 # EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms (e.g. the pre-1.50.0
@@ -107,9 +169,12 @@ docker run --rm \
   -e RANK="${NODE_RANK}" \
   -e NCCL_DEBUG="${NCCL_DEBUG}" \
   ${EP_NIC_NAME:+-e EP_NIC_NAME=$EP_NIC_NAME} \
+  ${NCCL_IB_HCA:+-e NCCL_IB_HCA=$NCCL_IB_HCA} \
   ${EP_BUFFER_DEBUG:+-e EP_BUFFER_DEBUG=$EP_BUFFER_DEBUG} \
   ${EP_MIN_TOKENS_PER_PART:+-e EP_MIN_TOKENS_PER_PART=$EP_MIN_TOKENS_PER_PART} \
   ${EP_NUM_SUB_PARTS:+-e EP_NUM_SUB_PARTS=$EP_NUM_SUB_PARTS} \
+  ${EP_MIN_SUB_TOKENS:+-e EP_MIN_SUB_TOKENS=$EP_MIN_SUB_TOKENS} \
+  ${EP_SM100_MIN_SUB_TOKENS:+-e EP_SM100_MIN_SUB_TOKENS=$EP_SM100_MIN_SUB_TOKENS} \
   ${EP_JIT_CACHE_DIR:+-e EP_JIT_CACHE_DIR=$EP_JIT_CACHE_DIR} \
   ${EXTRA_ENV_ARGS} \
   -e PYTHONUNBUFFERED=1 \
@@ -120,7 +185,7 @@ docker run --rm \
     --num-processes=${NUM_PROCESSES} --num-tokens=${TOKENS} \
     --hidden=7168 --num-topk=8 --num-experts=256 \
     --num-sms=${NUM_SMS} --allow-hybrid-mode=1 \
-    --prefer-overlap-with-compute=0 --test-first-only \
+    --prefer-overlap-with-compute=0 ${FIRST_ONLY_ARG} \
     ${IGNORE_LOCAL:+--ignore-local-traffic} $*"
 # python3 -u / PYTHONUNBUFFERED: without them stdout is block-buffered into the
 # redirected log, so a run that hangs in NCCL/GIN init shows an EMPTY log.

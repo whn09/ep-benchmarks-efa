@@ -127,6 +127,16 @@ docker build --progress=plain -t deepep-efa:1.50.0 .
 
 约 **21.4 GB**（压缩后 7.7 GB），首次十几分钟。
 
+**默认只编 Hopper**（`TORCH_CUDA_ARCH_LIST=9.0`、CUDA 13.0.2），本文所有数字都是这一档。
+换 Blackwell 两个 build-arg 都得改，一个镜像只编一档：
+
+| 目标 | build 参数 |
+|---|---|
+| p5en / H200，`sm_90` | *（默认）* |
+| p6-b300 / B300，`sm_103` | `--build-arg TORCH_CUDA_ARCH_LIST=10.3 --build-arg CUDA_VERSION=13.3.1` |
+
+CUDA base 为什么也得动，见 §3.4。
+
 ### 3.1 启动容器
 
 ```bash
@@ -233,6 +243,67 @@ NCCL_LIB="$(python3 -c 'import nvidia.nccl,os;print(os.path.join(list(nvidia.ncc
 
 顺带说明为什么不用改 `EP_HYBRID_KERNEL`：默认就是 EFA 需要的 `unordered`，不用显式钉（真要钉也无害，见 §6）。
 
+### 3.4 B300 / `sm_103` 的两个坑（p5en 上不会出现）
+
+别人照这份 runbook 在 2 × p6-b300 上起过一遍，撞到两个 p5en 复现不出来的失败。两个都靠
+build-arg / env 解决，不用改源码。**下面的现象和修复是他们实测的，机制是我在钉的那个
+DeepEP tree 上读出来的。**
+
+**坑 1：NCCL 只建了 2 个 GIN GDAKI NIC，rank 4 直接崩。**
+
+```
+transport/net_ib/gin.cc:262 (ncclGinIbGdakiGetProperties)
+NCCL WARN NET/IB : Requested properties for GIN GDAKI NIC 4, only 2 GIN GDAKI NICs have been created
+RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:185): 5
+```
+
+p6-b300 上 `ibv_devinfo -l` 返回 **18** 个设备：16 个 `rdmap*`（EFA）+ `ibp198s0f0` /
+`ibp199s0f0`（**不是 EFA**，附录 A 的 `ce_probe` 对这两个是 CE FAIL / errno 95）。NCCL 默认的
+网卡选择在这种混合列表上只建了 2 个 GDAKI NIC，而 `ElasticBuffer` 要的是**每个本地 rank 一个**
+（每节点 8 个）。设 `NCCL_IB_HCA=rdmap`（前缀匹配，排掉那两个 `ibp`）即可，日志会变成
+`NET/Libfabric_GDAKI : GPU Direct RDMA Enabled for HCA 0..7 'rdmap*'`，`ElasticBuffer` 初始化
+成功并选中 `unordered` kernel。p5en 是 16 个纯 `rdmap*`，所以默认就能建满、碰不到。
+`run_test_ep.sh` 现在会**在检测到非 `rdmap` 的 ibverbs 设备时**自动注入这个变量 —— 不无条件设，
+否则会掩盖掉"这台机器上 EFA 设备根本不叫 rdmap"这种情况。
+
+**坑 2：`sm_103` 上 elastic kernel JIT 编译失败（CUDA 13.0.2 的 ptxas）。**
+
+```
+NVCC compilation failed: ptxas ..._kernel.ptx, line 400; error : Arguments mismatch for instruction 'mov'
+ptxas fatal   : Ptx assembly aborted due to errors
+RuntimeError: Assertion (csrc/jit/compiler.hpp:239): "NVCC compilation failed"
+```
+
+**在第一次 dispatch 时才炸，build 阶段看不出来** —— 这些 kernel 是运行时用 base 镜像里的
+`nvcc` JIT 出来的。`deep_ep/include/deep_ep/common/ptx.cuh` 里有多处
+`#if __CUDA_ARCH__ >= 1000`（`:106` 的 `st.bulk`、`:229` 起的 `.v4.s64` LD/ST，形如
+`ld.L1::no_allocate.L2::cache_hint.global.nc.v4.s64 {4 个 64 位寄存器}`）；`sm_103` = 1030
+会进这些分支，13.0.2 的 ptxas 不认。**修复：`--build-arg CUDA_VERSION=13.3.1`**，b300 上实测
+换完 dispatch/combine 正常出数。pip 的 torch 仍然是 `cu130`（CUDA 次版本兼容），只动 base。
+
+**这个坑没有宏可以绕。** `DISABLE_AGGRESSIVE_PTX_INSTRS` 在这个 pin 上只有
+`csrc/kernels/legacy/utils.cuh`（V1 路径）引用，`deep_ep/include/deep_ep/impls/` 里**零处**；
+而 JIT 自己在 `csrc/jit/compiler.hpp` 里拼 flags，只处理 `EP_JIT_CPP_STANDARD` /
+`EP_NUM_TOPK_IDX_BITS` 那几个，`EP_JIT_EXTRA_FLAGS` 在源码里还是 TODO —— 根本没有往 JIT 传
+`-D` 的入口。`setup.py` 对 `arch != 9.0` 加的那个 `-D` 只作用于 AOT 的 `_C.so`。把那个 TODO
+实现掉，是值得往上游提的一条。
+
+**所以 B300 的完整必要条件是：** host `efa.ko` 3.3.0（和 p5en 一样）+
+`--build-arg CUDA_VERSION=13.3.1` + `--build-arg TORCH_CUDA_ARCH_LIST=10.3` + 运行时
+`NCCL_IB_HCA=rdmap` + 多机显式 `--num-sms`。最后一条在 b300 上的理由和 p5en 不同：自动探测
+**不是崩，而是偏低** —— `get_rdma_gbs` 只返回**一块**网卡的速率，而 b300 每 GPU 两张 EFA，
+真值 100 GB/s 它只看到 50。
+
+修完之后的抽查（2 节点 16 rank，`--num-tokens 8192`）：dispatch 12 SM ≈ **1025 µs**、
+combine 24 SM ≈ **1800 µs**。这是两个不同 SM 档上各一次读数，**不是 campaign** ——
+它只说明这套栈跑通了，不说明 B300 有多快。b300 上成体系的数字来自**另一个镜像**
+（AWS `awsome-distributed-ai#1234` 那份 recipe：CUDA 13.1.2 / torch 2.11，DeepEP pin 相同），
+在 `../adai-ep-comparison-b300/RESULTS_b300.md`。那批数字里和本文直接相关的两条：PR #2 的
+clamp 在 b300 上复现且**更大**（decode dispatch −37.6%，p5en 是 −33.5%），但
+**PR #1 的 `EP_NUM_SUB_PARTS=1` 在 `sm_103` 上是零到微负**（p5en 上是能叠加的），所以 §5.5
+"再叠一个 `EP_NUM_SUB_PARTS=1`"那条建议是 Hopper 专属；另外 b300 上 clamp 是把 SM 曲线
+**压平**而不是移动最优点（打了补丁之后 12 SM 和 24 SM 打平）。
+
 ---
 
 ## 4. 跑测试
@@ -275,7 +346,11 @@ docker run --rm --name ep \
       --prefer-overlap-with-compute=0 --test-first-only"
 ```
 
-**`--num-sms` 在 EFA 上必须显式给**，不给会直接崩：
+上面这条裸 `docker run` 是 p5en 的。**b300 上还要加 `-e NCCL_IB_HCA=rdmap`**，否则 NCCL 只建
+2 个 GDAKI NIC、rank 4 起不来（§3.4）；用 `run_test_ep.sh` 的话它会自动检测注入。
+
+**`--num-sms` 一律显式给。** 在本文跑 campaign 的那个 pin（`ec623f3`）上不给会直接崩；在
+Dockerfile 现在钉的 `8e7b42e` 上不崩，但探测值偏低（b300 上是真值的一半，§3.4）。崩的样子：
 
 ```
 File ".../deep_ep/buffers/elastic.py", line 824, in get_theoretical_num_sms
@@ -655,7 +730,9 @@ commit，它和 `ec623f3` 的 8 组配对全部落在 0.7% 以内（summary.txt 
 | 变量 | 用的值 | 说明 |
 |---|---|---|
 | `EP_HYBRID_KERNEL` | `unordered`（默认） | **EFA 上必须保持 unordered。** 设成 `ordered` 走上游 kernel，要求 VA signal + strong signal，EFA 不支持 |
-| `EP_NIC_NAME` | `rdmap85s0` | 上游默认 `mlx5_0` 是 IB 的。用 `ibv_devinfo -l` 查实际名。它只喂 `get_rdma_gbs()`，而那条路在 EFA 上本来就坏，所以给对给错都不如直接给 `--num-sms` |
+| `EP_NIC_NAME` | `rdmap85s0` | 上游默认 `mlx5_0` 是 IB 的。用 `ibv_devinfo -l` 查实际名。它只喂 `get_rdma_gbs()`；在钉的 `8e7b42e` 上那条路**是通的**（先读 sysfs），但只返回**一块**网卡的速率 —— p5en 每 GPU 一张（50 GB/s，正好），b300 每 GPU 两张（真值 100，探测到 50）。所以还是直接给 `--num-sms` |
+| `NCCL_IB_HCA` | b300 上 `rdmap` | 只在这台机器还有非 EFA 的 ibverbs 设备时才需要（b300 有 2 个 `ibp*`），不设 NCCL 只会建 2 个 GDAKI NIC 然后崩。`run_test_ep.sh` 自动检测注入（§3.4） |
+| `EP_MIN_TOKENS_PER_PART` / `EP_NUM_SUB_PARTS` / `EP_MIN_SUB_TOKENS` / `EP_SM100_MIN_SUB_TOKENS` | 见 §5.5 | decode 的 part 几何。四个都要靠 PR #1 才能进 JIT，没有 #1 时它们**静默无效** |
 | `NCCL_NET_PLUGIN` | `ofi` | 用名字解析，别写死路径 |
 | `FI_PROVIDER` | `efa` | 是 `efa` 不是 `efa-direct`，fabric 由插件自己选 |
 | `FI_EFA_USE_DEVICE_RDMA` | `1` | |
@@ -741,7 +818,13 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 
 ## 7. 测性能的四条硬规矩
 
-1. **每个变体独立 `EP_JIT_CACHE_DIR`。** GIN 的 device 侧头文件会编进 DeepEP 的 JIT kernel，共享缓存会悄悄复用对方的 kernel。"A/B 完全没差别"最常见的原因就是这个。
+1. **每个变体独立 `EP_JIT_CACHE_DIR`** —— 而且原因和直觉相反。cache key 是
+   `name$$compiler$$flags$$code`（`csrc/jit/compiler.hpp:123`），`compiler` 只是 `"NVCC13.1"`，
+   `code` 是**生成出来的 wrapper**；`deep_ep/include/deep_ep/impls/` 下的实现头文件只是被
+   `#include`，**内容根本不进 key**。所以两个只差一个头文件补丁的镜像 key 完全相同，共享 cache
+   目录会把没打补丁的 cubin 喂给打了补丁的镜像 —— 补丁测出来是个完美的 no-op。`flags` **在** key
+   里，所以同一个镜像内用 env 开关（`EP_NUM_SUB_PARTS` / `EP_MIN_TOKENS_PER_PART` …）做 A/B 是
+   安全的，不需要分目录。"A/B 完全没差别"最常见的原因就是这个。
 2. **交错跑 rep**（`A B A B ...`），绝不能先跑完所有 A 再跑 B —— 否则热漂移和集群漂移全算到其中一个变体头上。
 3. **`rc=0` 不是健康检查。** 上一轮崩掉的 rank 可能活着、每张 GPU 占着 ~48 GB。下一轮如果泄漏不大、GDAKI init 还能过，会跑完、`rc=0`、输出完整，然后**延迟虚高约 2×**，日志里没有任何提示（4 节点上见过 combine 连续四轮 7.7→12.5→16.5→19.6 ms 而每轮都报成功，显存同步爬 0→8.9→29.7→43 GB）。所以每轮之间必须断言 `nvidia-smi --query-gpu=memory.used --format=csv,noheader` 全是 0 MiB，并且**每轮换一个 `MASTER_PORT`**（`TIME_WAIT` 表现为 rendezvous 卡死）。用 docker 跑省事 —— `docker rm -f` 会带走整棵进程树。
 4. **报数字要报全 rank，并且带上口径。** rank 之间是系统性不同的，而且差异往往**按节点分层**（§5.3 里 combine 就是一整台机器慢 14%）。单个 rank、单台机器的区间都不是这一轮的数字。同时永远把时间（µs）和带宽（GB/s）一起报，并说明分母 —— 只报 GB/s 曾经把结论弄反过。
@@ -758,6 +841,8 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 4. **没有单机基线**（1 次 run）。本目录全部是 ≥ 2 节点，所以 DeepEP 自身的 kernel 开销和跨机 EFA 开销从来没分开过。
 5. **combine 慢的那台机器到底跟机器还是跟角色**（1 次 run，把 `NODE_RANK` 对调）。combine / reduced combine 按机器分层（2 节点 13~17%），慢的那台在一批连续 rep 内固定、跨批会翻转；把 leader 角色换到另一台就能判定。
 6. **4 节点那几个臂太薄**（给 4N 的行补第 3 个 rep）。这里多数 4 节点臂只有 1~2 个 rep，2 节点是 3 个；rep 间离散度实测 ≤ 0.31%，但那主要是 2 节点上测的。
+7. **BF16 dispatch，任何 scale 都没测过**（要改 harness，不是加跑一次）。`run_test_ep.sh` 传的是 `--test-first-only`，而 `enumerate_ep_modes()`（`test_ep.py:33-41`）的第一项是 `use_fp8_dispatch=1, expert_alignment=128`。所以**本文每一个数字都是 FP8 dispatch @ alignment 128**；`test_ep.py` 没有单独选 BF16 的开关，`TEST_FIRST_ONLY=0` 是把整个模式笛卡尔积跑一遍（几小时）。目前唯一一个 BF16 读数来自 b300 那个 kit，显示 BF16 dispatch 是**更慢**的那一侧，所以这里的数字没有因为这个选择被美化 —— 但它仍然是一根没测的轴。
+8. **这个镜像在 `sm_103` 上的正式 campaign**（2 次 run：prefill + decode，3 个 rep，带 SM 轴）。b300 目前只有 §3.4 那个抽查，而成体系的 b300 数字来自另一个镜像，所以本文没有任何一行是可以跨架构比的。build 和 launcher 现在都已经支持 b300，缺的只是重建 + 照常扫一遍。
 
 ---
 
@@ -851,8 +936,11 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null  # 两份，认清�
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| `ZeroDivisionError` in `get_theoretical_num_sms` | `--num-sms 0` 走 `ibstat` 自动探测，EFA 上必失败 | 显式给 `--num-sms 12`（§4.2） |
+| `ZeroDivisionError` in `get_theoretical_num_sms` | **只在旧 pin `ec623f3` 上**：`--num-sms 0` 走 `ibstat` 自动探测，EFA 上必失败（§4.2）。Dockerfile 现在钉的 `8e7b42e` 先读 sysfs，不会崩 | 显式给 `--num-sms 12`（§4.2） |
 | `Failed to get RDMA connection speed:` | 同上，`ibstat` 看不到 EFA 设备 | 单机无害；多机必须给 `--num-sms` |
+| `num_sms` 自动探测出来偏小（b300 上 `rdma_gbs=50.0`） | `get_rdma_gbs` 只返回**一块**网卡的速率；b300 每 GPU 两张 EFA，真值 100 GB/s | 显式给 `--num-sms`（§3.4） |
+| `only 2 GIN GDAKI NICs have been created` + `NCCL exception (nccl.cu:185): 5` | 混合 ibverbs 设备列表（b300 有 2 个非 EFA 的 `ibp*`）让 NCCL 少建了 GDAKI NIC | `NCCL_IB_HCA=rdmap`；`run_test_ep.sh` 已自动注入（§3.4） |
+| `Arguments mismatch for instruction 'mov'` → `ptxas fatal` → `compiler.hpp:239` | `sm_103` 命中 `ptx.cuh` 的 `__CUDA_ARCH__ >= 1000` 分支（`.v4.s64`），CUDA 13.0.2 的 ptxas 不认。第一次 dispatch 才炸 | 重建镜像：`--build-arg CUDA_VERSION=13.3.1`（§3.4）；没有宏能绕 |
 | 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题：`ec623f3` 上 `#QPs` 恒为 11、与 SM 无关，本仓库 6/12/16/24/32 SM 全部跑通（§4.2）。先查上一轮有没有漏进程 —— rc=0 也不代表干净 | `nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§7） |
 | `ibv_devinfo`: No IB devices found，但 `lsmod` 有 efa | 启动时 ENI 没开 EFA | 重建实例，`InterfaceType=efa` |
 | `fi_info -p efa-direct` → `-61 (No data available)` | **正常现象**，`-p` 匹配 provider（`efa`）不是 fabric | 用 `fi_info \| grep fabric` |

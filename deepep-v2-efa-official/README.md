@@ -163,6 +163,17 @@ ssh <node> "cd ~/work/deepep-v2-efa-official && docker build -t deepep-v2-efa-of
 ~21.4 GB (7.7 GB compressed), ~15 min cold. The installer tarball must be in the build
 context; it is not committed here because of its size.
 
+**The defaults build for Hopper only** (`TORCH_CUDA_ARCH_LIST=9.0`, CUDA 13.0.2), which is
+what every number below was measured on. On Blackwell both args must change:
+
+| target | build args |
+|---|---|
+| p5en / H200, `sm_90` | *(defaults)* |
+| p6-b300 / B300, `sm_103` | `--build-arg TORCH_CUDA_ARCH_LIST=10.3 --build-arg CUDA_VERSION=13.3.1` |
+
+One arch per image. Why the CUDA base has to move too, and the runtime env B300 also needs,
+are in *[B300 / `sm_103`](#b300--sm_103-two-blockers-not-in-the-p5en-path)*.
+
 ### Build gotchas (all of these are already handled in the Dockerfile)
 
 1. **Do not clear the apt cache before installing EFA.** The installer runs its own
@@ -324,6 +335,75 @@ Check the NCCL version from that line or from `NCCL_DEBUG=INFO`'s
 `NCCL version 2.31.2+cuda13.3` — **not** from `torch.cuda.nccl.version()`, which reports
 torch's compile-time header (2.29.7) forever. There are **three** NCCL versions in the
 image; see the Chinese runbook's Appendix B.
+
+## B300 / `sm_103`: two blockers not in the p5en path
+
+Someone else brought this recipe up on 2 × p6-b300 and hit two failures that p5en cannot
+produce. Both are fixed by build args / env, neither needs a source change. Their reports
+are the measurements; the mechanisms below were read out of the pinned DeepEP tree.
+
+**1. NCCL creates only 2 GIN GDAKI NICs, and rank 4 dies.**
+
+```
+transport/net_ib/gin.cc:262 (ncclGinIbGdakiGetProperties)
+NCCL WARN NET/IB : Requested properties for GIN GDAKI NIC 4, only 2 GIN GDAKI NICs have been created
+RuntimeError: NCCL exception (csrc/kernels/backend/nccl.cu:185): 5
+```
+
+`ibv_devinfo -l` on p6-b300 returns **18** devices: 16 `rdmap*` EFA plus
+`ibp198s0f0` / `ibp199s0f0`, which are not EFA at all (`ce_probe` gives them CE FAIL,
+errno 95). NCCL's default NIC selection on that mixed list built 2 GDAKI NICs, while
+`ElasticBuffer` needs one per local rank — 8 per node. `NCCL_IB_HCA=rdmap` (prefix match,
+excluding the two `ibp`) fixes it, and the log then reads
+`NET/Libfabric_GDAKI : GPU Direct RDMA Enabled for HCA 0..7 'rdmap*'`. p5en has 16 pure
+`rdmap*` devices, so it never trips this. `run_test_ep.sh` now injects
+`NCCL_IB_HCA=rdmap` **automatically, but only when a non-`rdmap` ibverbs device is actually
+present** — a blanket default would hide a host whose EFA devices are named otherwise.
+
+**2. The elastic kernels fail to JIT on `sm_103` under CUDA 13.0.2.**
+
+```
+NVCC compilation failed: ptxas ..._kernel.ptx, line 400; error : Arguments mismatch for instruction 'mov'
+ptxas fatal   : Ptx assembly aborted due to errors
+RuntimeError: Assertion (csrc/jit/compiler.hpp:239): "NVCC compilation failed"
+```
+
+This fires at the **first dispatch**, not at build time, because these kernels are JIT-ed
+against the base image's `nvcc`. `deep_ep/include/deep_ep/common/ptx.cuh` has several
+`#if __CUDA_ARCH__ >= 1000` blocks — `st.bulk` at `:106`, and from `:229` the LD/ST helpers
+in their `.v4.s64` forms (`ld.L1::no_allocate.L2::cache_hint.global.nc.v4.s64 {four 64-bit
+regs}`). `sm_103` is `1030`, so it takes them, and 13.0.2's ptxas rejects the result. **Fix: build with
+`--build-arg CUDA_VERSION=13.3.1`** — verified on b300, after which dispatch and combine
+run and produce numbers. The pip torch wheel stays `cu130` (CUDA minor versions are
+compatible), so only the base moves.
+
+**There is no macro that avoids this.** `DISABLE_AGGRESSIVE_PTX_INSTRS` is referenced in
+exactly one file at this pin, `csrc/kernels/legacy/utils.cuh` — the V1 path; **zero** uses
+in `deep_ep/include/deep_ep/impls/`. And the JIT builds its own flags in
+`csrc/jit/compiler.hpp`, handling only `EP_JIT_CPP_STANDARD` / `EP_NUM_TOPK_IDX_BITS` and
+friends, with `EP_JIT_EXTRA_FLAGS` still a source TODO — so there is no way to pass a `-D`
+into the JIT at all. `setup.py`'s `-DDISABLE_AGGRESSIVE_PTX_INSTRS` for `arch != 9.0`
+reaches only the AOT `_C.so`. Implementing that TODO is the upstream fix worth asking for.
+
+**The complete B300 prerequisite list**, then, is: host `efa.ko` 3.3.0 (as on p5en) +
+`--build-arg CUDA_VERSION=13.3.1` + `--build-arg TORCH_CUDA_ARCH_LIST=10.3` + runtime
+`NCCL_IB_HCA=rdmap` + an explicit `--num-sms` on multi-node. On the last one, note that
+auto-detection on b300 is not broken but *low*: `get_rdma_gbs` returns **one** device's
+rate and a b300 GPU has two EFA NICs, so it sees 50 of the real 100 GB/s.
+
+Spot check after the fixes (2 nodes, 16 ranks, `--num-tokens 8192`): dispatch ≈ **1025 µs**
+at 12 SM, combine ≈ **1800 µs** at 24 SM. That is a single reading at two different SM
+counts, not a campaign — it says the stack works, not how fast B300 is.
+
+**What does not transfer from the p5en tables.** The `sm_103` numbers we do have in depth
+come from a *different* image (the AWS `awsome-distributed-ai#1234` recipe: CUDA 13.1.2,
+torch 2.11, same DeepEP pin) and live in `../adai-ep-comparison-b300/RESULTS_b300.md`. From
+that campaign, two things matter here: PR #2's clamp reproduces on b300 and is *larger*
+(decode dispatch −37.6% vs −33.5% on p5en), but **PR #1's `EP_NUM_SUB_PARTS=1` is
+neutral-to-slightly-negative on `sm_103`** where it stacks on p5en — so the "set
+`EP_NUM_SUB_PARTS=1`" advice in *[Decode — two independent wins](#decode---num-tokens128--two-independent-wins-that-stack)*
+is Hopper-specific. And on b300 the clamp **flattens** the SM curve instead of moving the
+optimum: patched 12 SM ties patched 24 SM.
 
 ## Results (p5en.48xlarge × 2 and × 4, 2026-08-25)
 
@@ -643,9 +723,15 @@ dispatch + reduced combine (422.4 vs 422.2 µs).
 
 ## Rules that decide whether a number is real
 
-1. **One `EP_JIT_CACHE_DIR` per variant.** GIN's device-side headers get compiled into
-   DeepEP's JIT kernels, so a shared cache silently serves the other arm's cubin. This is
-   the single most common reason an A/B "shows no difference".
+1. **One `EP_JIT_CACHE_DIR` per variant** — and the reason is the opposite of intuitive.
+   The cache key is `name$$compiler$$flags$$code` (`csrc/jit/compiler.hpp:123`), where
+   `compiler` is just `"NVCC13.1"` and `code` is the *generated wrapper*: the impl headers
+   under `deep_ep/include/deep_ep/impls/` are only `#include`d, so **their content is not
+   hashed**. Two images differing only by a header patch therefore produce identical keys,
+   and a shared cache dir hands the patched image the old cubin — the patch measures as a
+   perfect no-op. `flags` *is* hashed, which is why env knobs (`EP_NUM_SUB_PARTS`,
+   `EP_MIN_TOKENS_PER_PART`, …) are safe to A/B inside one image and need no separate dir.
+   This is the single most common reason an A/B "shows no difference".
 2. **Interleave reps** (`A B A B …`), never all-A-then-all-B, or thermal and cluster drift
    land entirely on one arm.
 3. **`rc=0` is not a health check.** Ranks leaked by a previous round stay alive holding
@@ -693,6 +779,18 @@ needs an image rebuild.
 6. **The thin 4-node arms** (a 3rd rep for the 4N rows). Most 4-node arms here are
    1–2 reps against 3 at 2 nodes; rep-to-rep spread is ≤ 0.31% where measured, but
    that is measured mostly at 2 nodes.
+7. **BF16 dispatch, at any scale** (needs a harness change, not a run). `run_test_ep.sh`
+   passes `--test-first-only`, and the first entry of `enumerate_ep_modes()`
+   (`test_ep.py:33-41`) is `use_fp8_dispatch=1, expert_alignment=128`. So **every number in
+   this document is FP8 dispatch at alignment 128**, and `test_ep.py` has no flag that
+   selects BF16 alone — `TEST_FIRST_ONLY=0` runs the entire mode product (hours). The one
+   BF16 data point we have, from the b300 kit, says BF16 dispatch is the *slower* arm, so
+   nothing here is flattered by the choice; it is still an unmeasured axis.
+8. **This image on `sm_103`** — a real campaign (2 runs: prefill + decode, 3 reps, SM axis).
+   B300 is only a spot check so far (see *B300 / `sm_103`*), and the numbers we quote in
+   depth for b300 come from a different image, so nothing on this page is
+   architecture-comparable. With `CUDA_VERSION=13.3.1` + `TORCH_CUDA_ARCH_LIST=10.3` the
+   build and the launcher now handle b300, so this is a rebuild plus the normal sweep.
 
 ## Files
 
