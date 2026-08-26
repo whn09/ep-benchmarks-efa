@@ -12,6 +12,19 @@ That is the difference from `deepep-v2-efa-gdaki-b200/` (local-only, not committ
 of campaign results), which builds `Xuan-1998/DeepEP@dev` with a hand-assembled stack. Measured on the same
 p5en pair, this packaged path costs **nothing** in performance (§ Results).
 
+**There is an upstream kit too, with a different job.**
+[`awslabs/awsome-distributed-ai` → `micro-benchmarks/expert-parallelism/deepep-v2-benchmark`](https://github.com/awslabs/awsome-distributed-ai/tree/main/micro-benchmarks/expert-parallelism/deepep-v2-benchmark)
+is the **install** reference: a `setup_deepep_gin.sh` that drops DeepEP V2 into a container you
+already have (a vLLM image, say), a reference Dockerfile from a bare CUDA base, and Slurm +
+enroot/pyxis sbatch files that validate the install. Use it to put DeepEP V2 into an existing
+serving image, or if your cluster is Slurm. This directory is a **measurement** harness: a
+pinned commit, one arch per image (including b300's `sm_103`), a multi-node campaign driver, an
+acceptance gate, bare-EC2 ssh launch, and a log name per cell carrying every axis. Use it to
+reproduce the tables under § Results. The two kits agree, independently, on every load-bearing
+requirement: installer ≥ 1.50 in the container, host `efa` ≥ 3.3.0 + `gdrdrv`, NCCL ≥ 2.31,
+exactly one NCCL in the image, and the `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` pair
+(their sbatch exports both).
+
 ## The two environment variables you must set
 
 1.50.0's `libnccl-net-ofi.so` registers **two** GIN plugins — a Libfabric
@@ -148,6 +161,14 @@ twice, before the build and again inside it against the tarball's own `ChangeLog
 and stamped as `EP_EFA_INSTALLER`. If you ever need a version that is not GA yet, it
 exists only in the dev bucket under the floating `aws-efa-installer-latest.tar.gz`
 name — check its ChangeLog, then rename it to the version you read.
+
+**The version string is not the real gate, the symbol is.** A tarball whose
+`ChangeLog.md` also opens with `## [1.50.0]` can still carry aws-ofi-nccl **1.20.0**,
+which exports only `ncclGinPlugin_v11`/`v13`; GA carries 1.21.1 with **v14**. So the
+installer layer runs
+`nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep -qw ncclGinPlugin_v14` and
+fails the build when it is absent — otherwise the image builds, runs, and silently
+serves the type-2 CPU proxy, which is the arm this directory measures against.
 
 Verify on every host (after the reboot, if there was one):
 

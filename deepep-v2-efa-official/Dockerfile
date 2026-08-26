@@ -50,8 +50,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    bucket's versioned URL (https://efa-installer.amazonaws.com/aws-efa-installer-1.50.0.tar.gz)
 #    -- nothing to rename. The name is versioned so that the image is self-describing:
 #    a `-latest` filename here would build a different stack the day that object
-#    becomes 1.51.0, with nothing in the image saying so. The grep below is the real
-#    guard; the filename alone would only move the mistake.
+#    becomes 1.51.0, with nothing in the image saying so. The two greps below are the
+#    real guard; the filename alone would only move the mistake.
+#
+#    The second grep is the load-bearing one. The version string is NOT sufficient:
+#    a pre-GA tarball whose ChangeLog also opens with `## [1.50.0]` ships aws-ofi-nccl
+#    1.20.0-1, which exports only ncclGinPlugin_v11/v13. The GA tarball ships 1.21.1-1,
+#    which adds **v14** -- the EFA-GDA op table. Without v14 the image builds fine, runs
+#    fine, and silently serves the type-2 CPU proxy, i.e. the exact arm this directory
+#    measures AGAINST. So gate on the export, not on the ChangeLog.
+#    (Same gate as the upstream reference image, awslabs/awsome-distributed-ai
+#     micro-benchmarks/expert-parallelism/deepep-v2-benchmark/deepep.Dockerfile.)
 ARG EFA_INSTALLER_VERSION=1.50.0
 ENV EP_EFA_INSTALLER=${EFA_INSTALLER_VERSION}
 COPY aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz /tmp/aws-efa-installer.tar.gz
@@ -61,15 +70,21 @@ RUN apt-get update && cd /tmp && tar xzf aws-efa-installer.tar.gz \
               head -8 aws-efa-installer/ChangeLog.md >&2; exit 1; }; } \
     && cd aws-efa-installer \
     && ./efa_installer.sh -y --skip-kmod --skip-limit-conf --no-verify \
+    && ldconfig \
+    && { nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so 2>/dev/null \
+           | grep -qw ncclGinPlugin_v14 \
+         || { echo "the bundled aws-ofi-nccl exports no ncclGinPlugin_v14 => no EFA-GDA:" >&2; \
+              dpkg -l 'libnccl-ofi*' >&2; exit 1; }; } \
     && cd / && rm -rf /tmp/aws-efa-installer /tmp/aws-efa-installer.tar.gz \
     && rm -rf /var/lib/apt/lists/*
 
-# installer 的 NGC 分支会顺带装 apt 的 libnccl2/libnccl-dev 2.28.3（并置成 hold）。
-# 2.28.3 < 2.30.4 => 没有 GIN。DeepEP 走 pip 那份 2.31.2 的 rpath 所以不受影响，
-# 但 `ldconfig` 把 libnccl.so.2 解析到 2.28.3、/usr/include/nccl.h 也是它，
-# 任何人动一下 LD_LIBRARY_PATH/LD_PRELOAD 就会静默掉到没有 GIN 的那份上。
-# 删掉是安全的：libnccl-ofi-ngc-v3 这个 deb 没有任何 Depends 字段，
-# libnccl-net-ofi.so 只链 libfabric.so.1、根本不链 libnccl（它是被 NCCL 加载的插件）。
+# `nvidia/cuda:*-devel` 基础镜像自带 apt 的 libnccl2/libnccl-dev 2.28.3 并 apt-mark hold
+# （不是 EFA installer 装的：installer 脚本里没有任何 libnccl2 安装路径，两个 plugin deb
+# 也都没有 Depends 字段）。2.28.3 < 2.30.4 => 没有 GIN。DeepEP 走 pip 那份 2.31.2 的
+# rpath 所以不受影响，但 `ldconfig` 把 libnccl.so.2 解析到 2.28.3、/usr/include/nccl.h
+# 也是它，任何人动一下 LD_LIBRARY_PATH/LD_PRELOAD 就会静默掉到没有 GIN 的那份上。
+# 删掉是安全的：libnccl-net-ofi.so 只链 libfabric.so.1、根本不链 libnccl（它是被 NCCL
+# 加载的插件）。
 # 但删掉之后必须给下面第 4 步补一个 -L（见那里的 LIBRARY_PATH）：setup.py 只发
 # `-l:libnccl.so.2` + rpath 而不发 -L，所以链接期本来是靠 apt 这份 .so 解析的。
 RUN apt-mark unhold libnccl2 libnccl-dev \

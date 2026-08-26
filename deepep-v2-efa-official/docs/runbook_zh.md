@@ -28,6 +28,16 @@ campaign → 验收 → 生成和 §9 一样的表。按顺序走，每一步都
 判据）。`run_test_ep.sh` 和 `run_campaign.sh` **默认就传**（`GIN_ENV`，置空即 type-2 对照臂），
 所以按本文走不会漏；但**裸 `docker run` 必须自己加**。
 
+**上游还有一套 kit，两者分工不同**：
+[`awslabs/awsome-distributed-ai` → `micro-benchmarks/expert-parallelism/deepep-v2-benchmark`](https://github.com/awslabs/awsome-distributed-ai/tree/main/micro-benchmarks/expert-parallelism/deepep-v2-benchmark)
+是**安装**参考：一个 `setup_deepep_gin.sh` 把 DeepEP v2 装进*你已有的*容器（比如 vLLM 镜像）、
+一份从裸 CUDA 基础镜像起的参考 Dockerfile、一对 Slurm + enroot/pyxis 的验证 sbatch。要往现有
+推理镜像里塞 DeepEP v2、或者你的集群是 Slurm，用它。本目录是**测量**用的：pin 死 commit、
+一份镜像一个 arch（含 b300 的 `sm_103`）、多机 campaign 驱动、验收脚本、裸 EC2 ssh 起进程、
+每个 cell 的日志命名带齐所有变量。要复现 §9 的表，用本目录。两边的依赖结论是独立得出的且
+一致：installer ≥ 1.50 装容器、host efa ≥ 3.3.0 + `gdrdrv`、NCCL ≥ 2.31、镜像里只留一份 NCCL、
+以及 `NCCL_GIN_TYPE=5` + `NCCL_SYM_GIN_KERNELS_ENABLE=0` 这一对（他们的 sbatch 也是这两个）。
+
 ---
 
 ## 1. 依赖链：为什么必须是 EFA installer 1.50.0
@@ -60,6 +70,12 @@ campaign → 验收 → 生成和 §9 一样的表。按顺序走，每一步都
 它的 libnccl-ofi 1.20.0 也已经导出 `ncclGinPlugin_v11` / `v13`（12 个 Gin 符号）、二进制里
 就有 GDAKI 字符串。所以"有没有 efa-direct"和"有没有 Gin 符号"都**不是**判据。真判据两个：
 `nm` 里有没有 **v14**，以及 `ibv_create_comp_cntr` 这个 verb 能不能成功（§4.4 的探针）。
+
+**tarball 的版本号也不是判据**，所以 Dockerfile 里那一层装完 installer 立刻
+`nm -D /opt/amazon/ofi-nccl/lib/libnccl-net-ofi.so | grep -qw ncclGinPlugin_v14`，不过则
+构建当场失败：存在过 ChangeLog 同样以 `## [1.50.0]` 开头、里面却是 ofi-nccl **1.20.0**（只有
+v11/v13）的 `aws-efa-installer-1.50.0.tar.gz`。GA 那份是 1.21.1、带 v14。少了 v14 的镜像照样
+建得出来、照样跑得通，只是静默走 type-2 CPU proxy —— 正好是本目录要对比的那条对照臂。
 
 **p6-b300 出厂带的是 1.47.0**（efa.ko 3.0.0，`GinPlugin` 符号一个都没有），所以 b300 上
 第 3 步不是可选的。顺序也不能颠倒：GDAKI 起不来的时候，§5.3 那两个 b300 专有失败根本还
