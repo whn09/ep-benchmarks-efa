@@ -22,9 +22,10 @@
 #   REPS=3         reps are ROTATED (every cell once per rep), not blocked per arm,
 #                  so a slow drift cannot be mistaken for an arm effect.
 #   NUM_PROCESSES=8   local ranks per node
-#   GIN_ENV        default "NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0".
-#                  Set to "" to measure the type-2 proxy backend on purpose; the
-#                  tag then says _type2 instead of _gin5 so the two never pool.
+#   GIN_ENV        default "NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0" (the
+#                  same default run_test_ep.sh applies on its own). Set to "" to
+#                  measure the type-2 proxy backend on purpose; the tag then says
+#                  _type2 instead of _gin5 so the two never pool.
 #   PORT_BASE=8500 a killed run leaves a TCPStore listener behind, so every cell
 #                  gets its own port.
 #   LOGDIR         remote log dir. Default $HOME/epruns
@@ -129,9 +130,12 @@ cell () {   # $1 arm  $2 image  $3 tokens  $4 sms  $5 knobtag  $6 extra env  $7 
   port=$((port + 1))
   # EP_BUFFER_DEBUG is never set here: it printf()s from inside dispatch's host
   # polling loop, i.e. inside the timed region, and only some launchers forward it.
+  # GIN_ENV goes through as GIN_ENV, not folded into EXTRA_ENV: run_test_ep.sh
+  # DEFAULTS it to the type-5 pair, so an empty GIN_ENV folded into EXTRA_ENV
+  # would silently come back as type 5 while the tag still said _type2.
   env="IMAGE=$img WORLD_SIZE=$NNODES NUM_PROCESSES=$NUM_PROCESSES TOKENS=$tok \
 NUM_SMS=$sms MASTER_PORT=$port IGNORE_LOCAL=1 NCCL_DEBUG=WARN TEST_FIRST_ONLY=1 \
-EXTRA_ENV='$GIN_ENV $extra'"
+GIN_ENV='$GIN_ENV' EXTRA_ENV='$extra'"
 
   echo "=== $tag  (port $port)"
   pids=()

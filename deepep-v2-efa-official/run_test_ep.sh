@@ -11,16 +11,17 @@
 #
 # Env:
 #   TOKENS=8192      8192 = prefill (report bandwidth), 128 = decode (report latency).
-#   NUM_SMS=12       Pass it explicitly. At the image's pinned DeepEP (8e7b42e)
-#                    --num-sms 0 does NOT crash -- get_rdma_gbs reads
-#                    /sys/class/infiniband/<nic>/ports/*/rate first and only falls
-#                    back to ibstat (the ZeroDivisionError in docs/runbook_zh.md
-#                    4.2 is the older ec623f3 pin). But it reports ONE device's
-#                    rate: correct on p5en (1 EFA per GPU = 50 GB/s), half the
-#                    truth on p6-b300 (2 per GPU = 100 GB/s). It is also NOT freely
-#                    tunable -- it changes the allocated QP count non-monotonically
-#                    and a value landing on num_qps < num_ranks hangs. Known-good:
-#                    12 on 2 p5en nodes, 6 on 4; 24 on 2 p6-b300 nodes.
+#   NUM_SMS=12       Pass it explicitly. --num-sms 0 does not crash at the pinned
+#                    DeepEP (get_rdma_gbs reads /sys/class/infiniband/<nic>/ports/*/rate
+#                    and only falls back to ibstat, which cannot work on EFA), but it
+#                    reports ONE device's rate: correct on p5en (1 EFA per GPU =
+#                    50 GB/s), half the truth on p6-b300 (2 per GPU = 100 GB/s).
+#                    It IS a free performance axis: the auto path allocates a
+#                    constant 11 GIN contexts regardless of SM count (every log in
+#                    results/ prints `#QPs: 11/11` at 6/12/16/24/32 SM, 2N and 4N),
+#                    so sweeping it cannot land on num_qps < num_ranks. p5en working
+#                    point: 24 SM at both 2 and 4 nodes (runbook 10.2); 12 SM if you
+#                    are on the two decode PRs. b300's SM axis is unmeasured.
 #   MASTER_PORT      use a DIFFERENT port per repetition: a killed run leaves a
 #                    TCPStore listener behind and the next one wedges in rendezvous.
 #   EP_MIN_TOKENS_PER_PART / EP_NUM_SUB_PARTS / EP_MIN_SUB_TOKENS /
@@ -49,6 +50,11 @@
 #                    devices (p6-b300 does); without it NCCL creates only 2 GIN
 #                    GDAKI NICs and rank 4+ dies. See the block below.
 #   TEST_FIRST_ONLY=1  0 runs the whole ep-mode product (hours), not just BF16.
+#   GIN_ENV          defaults to `NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0`,
+#                    i.e. GDAKI is ON unless you ask for the control arm with
+#                    GIN_ENV= (empty). Forgetting the pair costs ~9% of prefill and
+#                    2.2-5.4x of decode latency with no visible symptom, which is
+#                    why it is a default. See the block above the docker run.
 #   IMAGE, WORLD_SIZE, NUM_PROCESSES, EP_NIC_NAME, NCCL_DEBUG, EXTRA_ENV
 #
 # Hardware note: the image must be built for THIS GPU's arch, and on p6-b300 that
@@ -174,17 +180,44 @@ if [ -z "${NCCL_IB_HCA:-}" ]; then
   done
 fi
 
-# EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms. It is how the
+# GIN_ENV -- the GDAKI pair, ON BY DEFAULT:
 #   NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0
-# pair is passed, and you almost always want that pair: 1.50.0 LOADS the GDAKI
-# plugin either way (`Loaded gin plugin Libfabric_GDAKI (v14)` prints in both arms)
-# but NCCL RUNS the type-2 Libfabric proxy backend unless type 5 is forced --
-# ~9% less prefill and 2.2-5.4x the decode latency. Set NCCL_GIN_TYPE=5 alone and
-# it crashes; both, or neither. Not baked in as a default so that the default arm
-# stays a measurable control. run_campaign.sh passes it and stamps `_gin5` into
-# the log name; a run without it gets `_type2`, so the two can never be pooled.
+# 1.50.0 LOADS the GDAKI plugin either way (`Loaded gin plugin Libfabric_GDAKI
+# (v14)` prints in both arms) but NCCL RUNS the type-2 Libfabric proxy backend
+# unless type 5 is forced -- ~9% less prefill and 2.2-5.4x the decode latency,
+# with nothing in the output looking wrong. That is why it is a default here and
+# not something you have to remember: forgetting it costs up to 5.4x silently.
+# Set NCCL_GIN_TYPE=5 alone and it crashes (sym-GIN kernels need strong signals,
+# GDAKI has none) -- both, or neither.
+#
+# The type-2 control arm is still measurable: pass GIN_ENV= (empty) for it. Do
+# that through GIN_ENV rather than by overriding NCCL_GIN_TYPE in EXTRA_ENV, so
+# that the backend a log ran on is a single variable (run_campaign.sh stamps it
+# as `_gin5` / `_type2` in the log name, and verify_run.sh cross-checks the name
+# against the env; the two backends must never be pooled).
+# Note the `-` (not `:-`): GIN_ENV= means "the control arm", not "use the default".
+GIN_ENV="${GIN_ENV-NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0}"
+
+# EXTRA_ENV="NAME=VALUE NAME=VALUE" -- one-off env for A/B arms (the decode part
+# geometry knobs, single-variable probes, ...).
 EXTRA_ENV_ARGS=""
 for kv in ${EXTRA_ENV:-}; do EXTRA_ENV_ARGS="$EXTRA_ENV_ARGS -e $kv"; done
+
+# A name set in EXTRA_ENV wins over GIN_ENV, by dropping it here rather than by
+# relying on how docker resolves a repeated -e for the same name.
+GIN_ENV_ARGS=""
+for kv in ${GIN_ENV:-}; do
+  case " ${EXTRA_ENV:-} " in
+    *" ${kv%%=*}="*) echo "=== GIN: ${kv%%=*} overridden by EXTRA_ENV ===" ;;
+    *) GIN_ENV_ARGS="$GIN_ENV_ARGS -e $kv" ;;
+  esac
+done
+if [ -n "${GIN_ENV:-}" ]; then
+  echo "=== GIN: $GIN_ENV ==="
+else
+  echo "=== GIN: none -- type-2 proxy backend (control arm). Prefill ~9% lower and" >&2
+  echo "===      decode 2.2-5.4x slower than GDAKI. Do not pool with a _gin5 arm. ===" >&2
+fi
 
 # Stamp what code is actually in the image into every log. The image tag is a
 # name someone chose; BUILD_REF is what `git rev-parse HEAD` said at build time.
@@ -211,6 +244,7 @@ docker run --rm \
   ${EP_MIN_SUB_TOKENS:+-e EP_MIN_SUB_TOKENS=$EP_MIN_SUB_TOKENS} \
   ${EP_SM100_MIN_SUB_TOKENS:+-e EP_SM100_MIN_SUB_TOKENS=$EP_SM100_MIN_SUB_TOKENS} \
   ${EP_JIT_CACHE_DIR:+-e EP_JIT_CACHE_DIR=$EP_JIT_CACHE_DIR} \
+  ${GIN_ENV_ARGS} \
   ${EXTRA_ENV_ARGS} \
   -e PYTHONUNBUFFERED=1 \
   -e PYTHONFAULTHANDLER=1 \

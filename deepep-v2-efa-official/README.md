@@ -23,6 +23,9 @@ either way, so that line does **not** mean GDAKI ran. Force type 5:
 NCCL_GIN_TYPE=5  NCCL_SYM_GIN_KERNELS_ENABLE=0     # both, or it crashes
 ```
 
+`run_test_ep.sh` / `run_campaign.sh` set this pair by default (`GIN_ENV`) — a bare
+`docker run` does not, so add it there.
+
 12 SM, `--test-first-only`, no `EP_BUFFER_DEBUG`, mean over **all** ranks; `SO` =
 per-rank scale-out bytes ÷ time as printed, which includes intra-node traffic and
 so is not a wire rate
@@ -258,19 +261,23 @@ on the default backend, inside that arm's across-rep spread (§ Results).
 
 ```bash
 # worker first, then leader; only NODE_RANK differs
-GIN='NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0'
-ssh <worker> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 EXTRA_ENV='$GIN' bash run_test_ep.sh 1 <leader-ip>" &
-ssh <leader> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 EXTRA_ENV='$GIN' bash run_test_ep.sh 0 <leader-ip>"
+ssh <worker> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 1 <leader-ip>" &
+ssh <leader> "cd ~/work/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 0 <leader-ip>"
 ```
 
 `TOKENS=8192` → prefill (report **bandwidth**). `TOKENS=128` → decode (report
 **latency**). Nothing else changes between the two.
 
-`EXTRA_ENV="NAME=VALUE …"` is the launcher hook for one-off env A/Bs; it is how
-the `NCCL_GIN_TYPE=5` pair is passed. Without that pair you get the type-2 proxy
-backend: ~9% less prefill and 2.2–5.4× the decode latency (§ The two environment
-variables). It is deliberately not baked in as a default so that the default arm
-stays a measurable control.
+The `NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0` pair is the **default** here
+(`GIN_ENV` in `run_test_ep.sh`, printed at startup): without it you get the type-2
+proxy backend — ~9% less prefill and 2.2–5.4× the decode latency, with nothing in
+the output looking wrong (§ The two environment variables). The control arm is
+still one word: `GIN_ENV= bash run_test_ep.sh …`. The default lives in the
+launcher rather than the image so that the control arm stays measurable.
+
+`EXTRA_ENV="NAME=VALUE …"` is the hook for one-off env A/Bs; a name set there
+replaces the `GIN_ENV` default for that name (the launcher drops the duplicate and
+says so, rather than leaving it to how docker resolves a repeated `-e`).
 
 **`test_ep.py` is not torchrun.** It `mp.spawn`s its own local ranks, so
 `WORLD_SIZE` = **node count** (2), `RANK` = **node index** (0/1), and `--num-processes`
@@ -401,8 +408,10 @@ build or the environment and not from the clamp.
 
 What the driver enforces, all of it learned the expensive way:
 
-- **`EXTRA_ENV="NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0"` on every cell**, and
-  `_gin5` vs `_type2` in the tag so the two backends can never be pooled.
+- **The GIN pair on every cell** (it is `run_test_ep.sh`'s default; the campaign passes
+  it through as `GIN_ENV`, never folded into `EXTRA_ENV`, so an empty value cannot come
+  back as type 5 behind a `_type2` tag), and `_gin5` vs `_type2` in the tag so the two
+  backends can never be pooled.
 - **A fresh `MASTER_PORT` per cell.** A killed run leaves a TCPStore listener behind and
   the next one wedges in rendezvous.
 - **Every axis in the filename** — arm, nodes, SM, tokens, knob, debug, backend, rep,

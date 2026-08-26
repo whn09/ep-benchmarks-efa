@@ -125,12 +125,12 @@ ENV EP_JIT_CACHE_DIR=/root/.deep_ep
 # DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法。
 #
 # 默认钉在一个 sha 上，而不是跟 main 漂 —— 理由不是"怕新代码"，是三条：
-#   1) runbook §5 的每个数字都对应一个确定的 tree。跟着 main 漂，重建出来的数字
+#   1) runbook §9 的每个数字都对应一个确定的 tree。跟着 main 漂，重建出来的数字
 #      和文档不符时，你分不清是自己环境搞错了还是代码变了。
-#   2) upstream 会**改写历史**。我们原来钉的 ec623f3 现在已经不在 main 上了：
-#      它被重写成 cc55cce（内容也变了，4 个文件 +41/−19），main 又往前走了 4 个
-#      commit。漂的话这种事发生时你毫无感知。
-#   3) `ordered` kernel 在 EFA GDAKI 上是**不正确**的（见 runbook §7）。默认 kernel
+#   2) upstream 会**改写历史**：我们钉过的一个 sha 现在已经不在 main 上了（被重写成
+#      另一个 sha，内容也变了 4 个文件 +41/−19）。钉着的时候这件事是可见的，
+#      漂着的时候完全隐形。
+#   3) `ordered` kernel 在 EFA GDAKI 上是**不正确**的（见 runbook §9.5）。默认 kernel
 #      选择将来一旦变化，漂的镜像会静默跑到错的 kernel 上。
 # 想跟最新就 `--build-arg DEEPEP_REF=main`，下面的 ADD 会自动让 layer cache 失效。
 # 没有这个 ADD 的话，`RUN git fetch origin main` 会命中旧 layer —— 你以为拉到了
@@ -160,8 +160,8 @@ RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
 # 实际名字用 `ibv_devinfo -l` 查，启动容器时按需覆盖。
 # 注意：它只喂给 get_rdma_gbs()。**这条路在本 Dockerfile 默认钉的 8e7b42e 上是通的**
 # ——`envs.py:306` 先读 `/sys/class/infiniband/<nic>/ports/*/rate`，`ibstat`（EFA 上必
-# 失败）只是 fallback，全失败时抛的是带修复建议的 RuntimeError 而不是
-# ZeroDivisionError。runbook §4.2 里那段 ZeroDivisionError 只对旧 pin ec623f3 成立。
+# 失败，它走 libibumad 而 EFA 没有 ib_umad）只是 fallback，全失败时抛的是带修复建议
+# 的 RuntimeError 而不是 ZeroDivisionError。
 # 但它返回的是**一块**网卡的速率：p5en 每 GPU 1 张 EFA（=50 GB/s，正好），
 # p6-b300 每 GPU 2 张（真值 100 GB/s，自动探测只看到一半）。所以 `--num-sms` 仍然
 # 建议显式给 —— 理由是可复现和 b300 上探测值偏低，不是会崩。
