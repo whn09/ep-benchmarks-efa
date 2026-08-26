@@ -108,8 +108,20 @@ head -6 aws-efa-installer/ChangeLog.md           # ## [1.50.0] - Aug 2026
 
 cd aws-efa-installer
 sudo ./efa_installer.sh -y --no-verify           # --no-verify 跳过 GPG 校验
-sudo reboot                                      # 换内核模块必须重启
+sudo reboot                                      # 见下：不是每次都必须，但最省事
 ```
+
+**要不要重启，installer 自己会在最后一行说。** 它先 `modprobe -r efa` 卸掉旧模块
+（`efa_installer.sh:415-425`）：卸成功就打 `Please logout/login to complete the
+installation.`，只有卸失败才 `NEED_REBOOT=1` 并改打 `Please reboot`。空闲机器上通常卸得掉
+（`/sys/module/efa/refcnt` = 0、`/sys/module/efa/holders/` 为空），所以这一步经常不需要重启。
+反过来，只要还有进程占着 EFA（跑着的任务、没清掉的容器）就一定要重启。**不确定就重启，
+两分钟的事**；真正的验收是下面 §3.2 那几行，不是"我重启过了"。
+
+> 装之前先看一眼 `find /lib/modules/$(uname -r) -name 'ib_uverbs.*'`。**Ubuntu AMI 缺
+> `ib_uverbs` 时 `-y` 不会替你升内核**：它打出一段 `apt-get upgrade` 命令然后直接
+> **exit 1**（`efa_installer.sh:258-284`，只有交互模式才会 prompt 并自动 reboot）。
+> 那种机器要先 `apt-get upgrade` + 重启，再回来跑 installer。DLAMI 不会遇到。
 
 host 上**不要**加 `--skip-kmod` —— 要的就是 efa.ko 3.3.0。DLAMI 通常已自带 gdrcopy 2.5.x 和
 `efa_nv_peermem`，一般只需要升 installer 本身。
@@ -119,7 +131,7 @@ host 上**不要**加 `--skip-kmod` —— 要的就是 efa.ko 3.3.0。DLAMI 通
 > 1.51.0）。先 `tar xzOf ... ChangeLog.md | head -4` 看清版本，再改名成你核过的版本号。
 > dev 桶的包没签名，所以 `--no-verify` 是必须的。
 
-### 3.2 重启后验证 host
+### 3.2 验证 host（装完必做，重启过就重启后做）
 
 ```bash
 export PATH=/opt/amazon/efa/bin:$PATH          # fi_info 默认不在 PATH 上
@@ -906,6 +918,8 @@ launcher / driver 侧（不是容器内变量）：
 | 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题（`#QPs` 恒为 11、与 SM 无关，6/12/16/24/32 SM 全部跑通） | 先查上一轮有没有漏进程：`nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§8 规矩 3） |
 | 延迟虚高 ~2× 但 `rc=0`、输出完整 | 上一轮泄漏的 rank 在抢显存 | `rc` 查不出来，必须查 `nvidia-smi`（§8 规矩 3） |
 | A/B 完全没有差别 | 两个镜像共享了 JIT cache 目录 —— 实现头文件的内容不进 cache key | 一个镜像一个 `EP_JIT_CACHE_DIR`（§8 规矩 1） |
+| installer 装完，`/sys/module/efa/version` 还是旧版本（例如 3.0.0） | 旧模块当时卸不掉（有进程占着 EFA），installer 结尾打的是 `Please reboot` | 清掉占用进程/容器后重启，再核这一行（§3.1） |
+| `efa_installer.sh -y` 直接 exit 1，打了一段 `apt-get upgrade` | Ubuntu AMI 的内核不带 `ib_uverbs`；`-y` 模式不会替你升内核 | 按它打的命令 `apt-get upgrade` + 重启，再回来装（§3.1） |
 | `ibv_devinfo`: No IB devices found，但 `lsmod` 有 efa | 启动时 ENI 没开 EFA | 重建实例，`InterfaceType=efa`（§2 第 1 条） |
 | `ibv_create_ah failed with EINVAL ... different availability zone` | 跨 AZ | 同 AZ + cluster placement group |
 | `fi_info -p efa-direct` → `-61 (No data available)` | **正常现象**，`-p` 匹配 provider（`efa`）不是 fabric | 用 `fi_info \| grep fabric`（§3.2） |

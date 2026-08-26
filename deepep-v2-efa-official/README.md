@@ -125,8 +125,19 @@ tar xzf aws-efa-installer-1.50.0.tar.gz            # ~650 MB, RPMs+DEBs for all 
 head -6 aws-efa-installer/ChangeLog.md             # ## [1.50.0] - Aug 2026
 cd aws-efa-installer
 sudo ./efa_installer.sh -y --no-verify
-sudo reboot                                        # swapping efa.ko requires it
+sudo reboot                                        # see below: often optional, always cheapest
 ```
+
+**Whether a reboot is needed is in the installer's last line.** It unloads the old
+module itself (`modprobe -r efa`, `efa_installer.sh:415-425`); if that works it ends
+with `Please logout/login to complete the installation.` and only a failed unload sets
+`NEED_REBOOT=1` and prints `Please reboot`. On an idle host the unload normally
+succeeds (`/sys/module/efa/refcnt` 0, `/sys/module/efa/holders/` empty), so no reboot
+is demanded; anything still holding EFA (a running job, a stray container) makes it
+mandatory. Reboot when unsure -- the gate is the verification below, not the reboot.
+Also check `find /lib/modules/$(uname -r) -name 'ib_uverbs.*'` first: on an Ubuntu AMI
+without `ib_uverbs`, `-y` does **not** upgrade the kernel for you, it prints an
+`apt-get upgrade` line and exits 1 (`efa_installer.sh:258-284`).
 
 1.50.0 is GA, so the URL above is versioned and there is nothing to rename —
 `build_image.sh` fetches the same file for the build context on its own. The
@@ -138,7 +149,7 @@ and stamped as `EP_EFA_INSTALLER`. If you ever need a version that is not GA yet
 exists only in the dev bucket under the floating `aws-efa-installer-latest.tar.gz`
 name — check its ChangeLog, then rename it to the version you read.
 
-Verify after reboot:
+Verify on every host (after the reboot, if there was one):
 
 ```bash
 export PATH=/opt/amazon/efa/bin:$PATH        # fi_info is not on the default PATH
