@@ -97,6 +97,17 @@ for f in "$@"; do
     echo "  WARN no --ignore-local-traffic: the SO column includes intra-node traffic"
     echo "       and can exceed the per-GPU wire rate. It is not a wire rate."
   fi
+  # An out-of-range num_allocated_qps is CLAMPED into [2, 17], not rejected, since
+  # upstream 9c1f2511 (it used to trip EP_HOST_ASSERT). It is reachable straight from
+  # this launcher -- test_ep.py has --num-qps / --num-allocated-qps and allocates
+  # max() of the two -- so a cell that asks for 768 quietly measures 17, and the log
+  # is the only place that says so. Same shape as the kMaxParts clamp that once made
+  # a whole sweep a no-op.
+  if grep -q 'clamped num_allocated_qps' "$f"; then
+    echo "  WARN $(grep -o 'clamped num_allocated_qps from [0-9]* to [0-9]*' "$f" | head -1)"
+    echo "       -- the effective QP count is the clamped one, not the one you asked"
+    echo "       for. Do not label this cell with the requested value."
+  fi
   if grep -q -- '--test-first-only' "$f"; then
     echo "  note --test-first-only: FP8 dispatch at expert_alignment=128 (the first"
     echo "       entry of enumerate_ep_modes), not BF16."
@@ -106,6 +117,19 @@ for f in "$@"; do
   ref=$(grep -o 'DeepEP=[0-9a-f]\{7,40\}' "$f" | head -1 | cut -d= -f2)
   qps=$(grep -o '#QPs: *[0-9]*/[0-9]*' "$f" | head -1)
   echo "  info DeepEP=${ref:-<unstamped image>}${qps:+  $qps}"
+  # `#QPs: A/B` is A used / B allocated (test_ep.py:82). A > B means the kernels were
+  # told to use more QPs than the buffer holds: the 9c1f2511 clamp bounds only the
+  # ALLOCATION, while --num-qps passes through, so `--num-qps 768` prints `768/17`.
+  # Every log under results/ has A == B (11/11 or 5/5), so a mismatch is the log
+  # telling you the cell is not the configuration its name claims.
+  if [ -n "${qps:-}" ]; then
+    used=$(printf '%s' "$qps" | sed 's|.*: *||; s|/.*||')
+    alloc=$(printf '%s' "$qps" | sed 's|.*/||')
+    if [ "${used:-0}" -gt "${alloc:-0}" ]; then
+      echo "  WARN #QPs $used/$alloc -- more QPs requested than allocated (the allocation"
+      echo "       was clamped). Fix the request; do not publish this as $used QPs."
+    fi
+  fi
   if [ -z "${ref:-}" ]; then
     echo "  WARN no DeepEP BUILD_REF in the log -- the image tag alone cannot attribute"
     echo "       a number; we have measured ~1.8x decode swings between two commits."

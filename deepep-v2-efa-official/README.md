@@ -248,7 +248,11 @@ are in *[B300 / `sm_103`](#b300--sm_103-two-blockers-not-in-the-p5en-path)*.
 All three were verified by an actual rebuild, not by reasoning.
 
 - **`ARG DEEPEP_REF` takes a branch, tag or bare sha, and defaults to a sha**
-  (`8e7b42e…`, current `main`, measured perf-neutral against the tables below). Track the
+  (`9c1f2511…`, `main` as of 2026-08-26). The tables below were measured at `ec623f3`
+  and re-checked at `8e7b42e` (all 8 pairs within 0.7%); `9c1f2511` is `8e7b42e` + one
+  commit that only clamps an *explicit* out-of-range `num_allocated_qps` instead of
+  asserting, so every arm here — auto (0) or an explicit 5, both in range — takes the
+  same path. That is an argument from the patch, not a re-measurement. Track the
   tip with `--build-arg DEEPEP_REF=main`. Two things make that safe: an
   `ADD https://api.github.com/…/commits/${DEEPEP_REF}` ahead of the clone, without which
   `RUN git fetch origin main` **hits a cached layer** and hands you last week's code while
@@ -454,8 +458,10 @@ What the driver enforces, all of it learned the expensive way:
 *local* ranks, then pooled per tag against the world), on the two b300 blocker
 signatures, and on a tag whose name disagrees with the env it was run under; it WARNs
 on the type-2 backend, `EP_BUFFER_DEBUG`, `--num-sms=0`, a missing
-`--ignore-local-traffic`, and an image with no `BUILD_REF` stamp. `rc=0` from the run
-itself proves none of this.
+`--ignore-local-traffic`, an image with no `BUILD_REF` stamp, and a clamped
+`num_allocated_qps` (out-of-range QP counts are silently clamped into [2, 17] as of
+`9c1f2511`, so the cell measured the clamped value — same trap as the `kMaxParts` clamp
+that once turned a sweep into a no-op). `rc=0` from the run itself proves none of this.
 
 ## B300 / `sm_103`: two blockers not in the p5en path
 
@@ -923,7 +929,7 @@ needs an image rebuild.
 | `build_image.sh` | Build wrapper. Probes `compute_cap` → the two build args that must match the GPU; arch-stamped tag; optional `DEEPEP_REF` for a second arm. |
 | `run_test_ep.sh` | One cell on one node. `TOKENS=8192` prefill / `TOKENS=128` decode; preflights a busy GPU, missing devices, and an image built for another arch; auto-detects `EP_NIC_NAME` and `NCCL_IB_HCA`. |
 | `run_campaign.sh` | Multi-node driver: `NODES="<leader> <worker>" ./run_campaign.sh`. Arch-derived cell list, 3 rotated reps, a port per cell, every axis in the log name. |
-| `verify_run.sh` | Acceptance gate on the logs: lost ranks (per file, then pooled per tag), the two b300 blockers, mislabelled tags, type-2 backend, `EP_BUFFER_DEBUG`, missing provenance. `rc=0` from a run proves none of this. |
+| `verify_run.sh` | Acceptance gate on the logs: lost ranks (per file, then pooled per tag), the two b300 blockers, mislabelled tags, type-2 backend, `EP_BUFFER_DEBUG`, a clamped `num_allocated_qps`, missing provenance. `rc=0` from a run proves none of this. |
 | `ce_probe.c` | `ibv_create_comp_cntr` probe over every device — the decisive GDAKI check. `gcc -o ce_probe ce_probe.c -libverbs` |
 | `docs/runbook_zh.md` | Full Chinese runbook: install → build → test, env-var reference, ~30-row troubleshooting table. |
 | `results/p5en_2n4n_20260825/make_tables.py` | **Emits every table published here** from `logs/`. `python3 make_tables.py` and paste — do not hand-edit a table. Includes a completeness audit (0 of 69 run tags short a rank). |

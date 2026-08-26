@@ -139,7 +139,12 @@ ENV EP_JIT_CACHE_DIR=/root/.deep_ep
 #
 # `git clone --depth 1 --branch <sha>` 不接受裸 sha，只能 init + fetch。
 # third-party/fmt 是 submodule，不拉的话 setup.py 和 JIT 都缺 fmt 头文件。
-ARG DEEPEP_REF=8e7b42e9b22de4bf70d1de6858db3725c341b628
+# 当前值 = 写这行时的 `main`（比上一版 pin 8e7b42e 快进 1 个 commit）。那个 commit
+# 只把**显式**越界的 `num_allocated_qps` 从 `EP_HOST_ASSERT` 改成 clamp 进 [2,17] + 打
+# 一行 `[WARN] DeepEP clamped num_allocated_qps from A to B`。本目录所有臂用的是 auto(0)
+# 或显式 5，两者都在范围内、逐行走同一条路，所以 §9 的数字不受影响（没有重测；
+# `verify_run.sh` 会 grep 那行 WARN，免得将来有人 sweep 到范围外而不自知）。
+ARG DEEPEP_REF=9c1f251118873e5dee9652cdfaf9848753cda7f1
 ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${DEEPEP_REF} /tmp/deepep-ref.json
 RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
     && git remote add origin https://github.com/amazon-contributing/DeepEP.git \
@@ -158,7 +163,7 @@ RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
 # ---------------------------------------------------------------------------
 # EFA 上网卡名不是 mlx5_0，DeepEP 用它查网卡属性。
 # 实际名字用 `ibv_devinfo -l` 查，启动容器时按需覆盖。
-# 注意：它只喂给 get_rdma_gbs()。**这条路在本 Dockerfile 默认钉的 8e7b42e 上是通的**
+# 注意：它只喂给 get_rdma_gbs()。**这条路在本 Dockerfile 默认钉的 9c1f2511 上是通的**
 # ——`envs.py:306` 先读 `/sys/class/infiniband/<nic>/ports/*/rate`，`ibstat`（EFA 上必
 # 失败，它走 libibumad 而 EFA 没有 ib_umad）只是 fallback，全失败时抛的是带修复建议
 # 的 RuntimeError 而不是 ZeroDivisionError。

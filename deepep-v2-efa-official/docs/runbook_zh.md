@@ -461,7 +461,10 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
   rank 数少于 world（= 你没把某台机器的日志传进来，或者真丢了 rank）；
   `only N GIN GDAKI NICs`；`ptxas fatal` / `compiler.hpp:239`；tag 名和实际 env 不符。
 - **WARN**（数字可用但不可比）：跑在 type-2 后端上；设了 `EP_BUFFER_DEBUG`；`--num-sms=0`；
-  缺 `--ignore-local-traffic`；日志里没有 `DeepEP=<sha>` 出处戳。
+  缺 `--ignore-local-traffic`；日志里没有 `DeepEP=<sha>` 出处戳；
+  `clamped num_allocated_qps from A to B`（你显式给的 QP 数越界了，`9c1f2511` 起是**静默
+  clamp** 而不是报错 —— 实际跑的是 B，别拿 A 给这个 cell 命名。和 §8 规矩 1 那个
+  `kMaxParts` clamp 是同一种坑）。
 
 `make_tables.py` **生成** §9 的每一张表，`parse_ep.py <tag>` 看单个 tag。别手抄表格 ——
 手抄的数字能通过所有 review。两个脚本都用 `finditer` 解析：并发 rank 会把两条记录粘在同一
@@ -505,9 +508,12 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
 **§9.1–9.4 的条件**：GIN type 5、`--test-first-only`、未开 `EP_BUFFER_DEBUG`、SM = **24**。
 §9.5 / §9.6 的对照实验在 **12 SM** 上做（要和对照臂对齐），每张表自己标了 SM 数。
 
-**出处**：这些数字的镜像 `BUILD_REF` 是 `ec623f3`；Dockerfile 现在默认钉 `8e7b42e`，两者
-的 8 组配对全部落在 **0.7%** 以内（`summary.txt` TABLE 8），所以按本文重建应当复现这些表。
-原始日志和生成脚本在 [`results/p5en_2n4n_20260825/`](../results/p5en_2n4n_20260825/)。
+**出处**：这些数字的镜像 `BUILD_REF` 是 `ec623f3`，并在 `8e7b42e` 上复核过一遍，8 组配对
+全部落在 **0.7%** 以内（`summary.txt` TABLE 8）。Dockerfile 现在默认钉 `9c1f2511`
+（= `8e7b42e` 快进 1 个 commit，那个 commit 只把**显式**越界的 `num_allocated_qps` 从
+assert 改成 clamp；本文所有臂用的是 auto 或显式 5，都在范围内，走同一条路 —— 这是读
+patch 得出的，**没有重测**）。所以按本文重建应当复现这些表。原始日志和生成脚本在
+[`results/p5en_2n4n_20260825/`](../results/p5en_2n4n_20260825/)。
 
 **口径**（每次报速率都要一起报）：
 
@@ -1038,7 +1044,7 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null   # 认清哪份是
    60 次/小时，仅用于算 cache key。）
 8. **每次跑都把实际 sha 打进日志。** 镜像 tag 是人起的名字，`BUILD_REF` 是构建时
    `git rev-parse HEAD` 的结果，`run_test_ep.sh` 开跑前打印
-   `=== IMAGE=... DeepEP=8e7b42e9... ===`。同 tag 重建过的镜像因此不会产生无法归属的数字。
+   `=== IMAGE=... DeepEP=9c1f2511... ===`。同 tag 重建过的镜像因此不会产生无法归属的数字。
 9. **`WORKDIR` 不能是 `/opt/DeepEP`**，否则 python 优先 import 源码目录里的 `deep_ep/`
    （不含 `_C.so`），报 `ModuleNotFoundError: deep_ep._C`。设成 `/workspace`，用绝对路径跑 test。
 10. **其他硬依赖**：`third-party/fmt` 是 submodule（缺了 `setup.py` 和 JIT 都少 fmt 头文件）；
