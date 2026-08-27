@@ -226,7 +226,13 @@ echo "=== IMAGE=${IMAGE}  DeepEP=$(docker run --rm --entrypoint cat "${IMAGE}" \
   /opt/DeepEP/BUILD_REF 2>/dev/null || echo 'BUILD_REF absent -- image predates SHA stamping') ==="
 
 set -x
-docker run --rm \
+# --init: tini as PID 1. Without it, python3 is PID 1 -- it does not reap zombies
+# and its signal forwarding is not reliable, so a torch.multiprocessing.spawn worker
+# that is mid-rendezvous when the container is asked to exit can survive as an
+# orphan on the host, keeping MASTER_PORT bound (address already in use next run).
+# --network=host means the TCPStore listens on the host port directly, so any
+# lingering fd owner keeps the port until it is killed by pid.
+docker run --rm --init \
   --gpus all --privileged --network=host --ipc=host \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   --device=/dev/infiniband --device=/dev/gdrdrv \
