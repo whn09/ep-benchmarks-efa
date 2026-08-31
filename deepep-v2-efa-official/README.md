@@ -17,8 +17,10 @@ p5en pair, this packaged path costs **nothing** in performance (§ Results).
 is the **install** reference: a `setup_deepep_gin.sh` that drops DeepEP V2 into a container you
 already have (a vLLM image, say), a reference Dockerfile from a bare CUDA base, and Slurm +
 enroot/pyxis sbatch files that validate the install. Use it to put DeepEP V2 into an existing
-serving image, or if your cluster is Slurm. This directory is a **measurement** harness: a
-pinned commit, one arch per image (including b300's `sm_103`), a multi-node campaign driver, an
+serving image, or if your cluster is Slurm. This directory is a **measurement** harness: an
+identified commit (the ref floats to `main`, but its sha is resolved before the build and lands
+in the image tag *and* in `/opt/DeepEP/BUILD_REF`, printed by every run), one arch per image
+(including b300's `sm_103`), a multi-node campaign driver, an
 acceptance gate, bare-EC2 ssh launch, and a log name per cell carrying every axis. Use it to
 reproduce the tables under § Results. The two kits agree, independently, on every load-bearing
 requirement: installer ≥ 1.50 in the container, host `efa` ≥ 3.3.0 + `gdrdrv`, NCCL ≥ 2.31,
@@ -238,9 +240,13 @@ A second arm for `amazon-contributing/DeepEP` [#1](https://github.com/amazon-con
 head, so one ref gives the stacked pair):
 
 ```bash
-./build_image.sh sm103 5a594a5db2d1b7c45c60c82b0cf026e9440886a4
-# -> deepep-v2-efa-official:sm103-5a594a5   (the tag run_campaign.sh looks for)
+gh pr view 2 --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid
+./build_image.sh sm103 bfbdd15ff448783f877cb2210cb3246c8452b05e
+# -> deepep-v2-efa-official:sm103-bfbdd15   (the tag run_campaign.sh looks for)
 ```
+
+A PR head moves when it is rebased, so read it with `gh pr view` before building rather than
+copying the sha above.
 
 One arch per image. Why the CUDA base has to move too, and the runtime env B300 also needs,
 are in *[B300 / `sm_103`](#b300--sm_103-two-blockers-not-in-the-p5en-path)*.
@@ -268,24 +274,28 @@ are in *[B300 / `sm_103`](#b300--sm_103-two-blockers-not-in-the-p5en-path)*.
 
 All three were verified by an actual rebuild, not by reasoning.
 
-- **`ARG DEEPEP_REF` takes a branch, tag or bare sha, and defaults to a sha**
-  (`9c1f2511…`, `main` as of 2026-08-26). The tables below were measured at `ec623f3`
-  and re-checked at `8e7b42e` (all 8 pairs within 0.7%); `9c1f2511` is `8e7b42e` + one
-  commit that only clamps an *explicit* out-of-range `num_allocated_qps` instead of
-  asserting, so every arm here — auto (0) or an explicit 5, both in range — takes the
-  same path. That is an argument from the patch, not a re-measurement. Track the
-  tip with `--build-arg DEEPEP_REF=main`. Two things make that safe: an
-  `ADD https://api.github.com/…/commits/${DEEPEP_REF}` ahead of the clone, without which
-  `RUN git fetch origin main` **hits a cached layer** and hands you last week's code while
-  looking fresh — worse than an honest pin; and `git rev-parse HEAD` stamped to
-  `/opt/DeepEP/BUILD_REF`, which `run_test_ep.sh` prints in every log so no number is
-  unattributable. `git clone --depth 1 --branch <sha>` does not accept a bare sha, hence
-  the `git init` + `git fetch --depth 1` form. Upstream **rewrites history** — the earlier
-  `ec623f3` is no longer reachable from `main` (rewritten as `cc55cce`, with content
-  changes, and `main` moved 4 commits past it), which a pin makes visible and a floating
-  ref hides. Check for drift without building:
-  `git ls-remote https://github.com/amazon-contributing/DeepEP.git refs/heads/main`,
-  then re-measure before bumping.
+- **`ARG DEEPEP_REF` takes a branch, tag or bare sha, and defaults to `main`.** Upstream
+  is pushing combine and dispatch changes weekly, so a pinned default would make
+  "just build me an image" silently hand you weeks-old code. What keeps a floating
+  default honest is that the identity of the tree is recorded in three places instead
+  of in the `ARG`: `build_image.sh` resolves the ref to a 40-char sha **before** the
+  build and names the image `…:<arch>-<sha7>`; the Dockerfile's
+  `ADD https://api.github.com/…/commits/${DEEPEP_REF}` ahead of the clone makes the
+  layer cache follow the commit — without it `RUN git fetch origin main` **hits a cached
+  layer** and hands you last week's code while looking fresh, which is worse than an
+  honest pin; and `git rev-parse HEAD` is stamped to `/opt/DeepEP/BUILD_REF`, which
+  `run_test_ep.sh` prints in every log. `build_image.sh` also compares the two and warns
+  if the image's `BUILD_REF` is not the sha you asked for. **Pass a sha explicitly to
+  reproduce a published number** (`./build_image.sh sm90 <sha>`) — not out of caution,
+  but because upstream **rewrites history** (the `ec623f3` these tables were measured at
+  is no longer reachable from `main`: rewritten as `cc55cce`, with content changes), and
+  because the `ordered` kernel is **incorrect** on EFA GDAKI (§9.5), so a future change
+  of the default kernel selection would silently move a floating image onto it. The
+  tables below were measured at `ec623f3` and re-checked at `8e7b42e` (all 8 pairs within
+  0.7%). `git clone --depth 1 --branch <sha>` does not accept a bare sha, hence the
+  `git init` + `git fetch --depth 1` form. To see what an existing image would be
+  rebuilt onto:
+  `git ls-remote https://github.com/amazon-contributing/DeepEP.git refs/heads/main`.
 - **apt's `libnccl2`/`libnccl-dev` 2.28.3 are removed.** The installer's NGC branch pulls
   them in and marks them `hold`. 2.28.3 < 2.30.4 ⇒ **no GIN**, and `ldconfig` resolves
   `libnccl.so.2` to *them* (`/usr/include/nccl.h` too). Safe to remove: the
@@ -310,8 +320,8 @@ on the default backend, inside that arm's across-rep spread (§ Results).
 
 ```bash
 # worker first, then leader; only NODE_RANK differs
-ssh <worker> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 1 <leader-ip>" &
-ssh <leader> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=24 bash run_test_ep.sh 0 <leader-ip>"
+ssh <worker> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=12 bash run_test_ep.sh 1 <leader-ip>" &
+ssh <leader> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=12 bash run_test_ep.sh 0 <leader-ip>"
 ```
 
 `TOKENS=8192` → prefill (report **bandwidth**). `TOKENS=128` → decode (report
@@ -359,7 +369,9 @@ backend is the lever). Every log in `results/p5en_2n4n_20260825/logs/` prints
 rows, use their operating points: **H200 2-node 12 SM / H200 4-node 6 SM / B200 2-node
 12 SM**.
 
-**For the fastest configuration, use 24 SM at both 2 and 4 nodes.** GIN type 5, 8192 tok,
+**The default is 12 SM** — `run_test_ep.sh`'s default, AWS's published operating point, and
+what every example and `prs` arm here uses. **24 SM is an optional trade, and what it buys is
+combine time, not dispatch.** GIN type 5, 8192 tok,
 mean over all ranks, no `EP_BUFFER_DEBUG`
 ([data](results/p5en_2n4n_20260825/summary.txt) TABLE 5/6):
 
@@ -376,7 +388,9 @@ Reps: 24 SM ×3 at 2N, 12 SM ×3 and 24 SM ×2 at 4N; single runs elsewhere.
 **Dispatch is nearly flat from 12 to 24 SM** (+2.2% at 2 nodes, +0.4% at 4) — it is
 *reduced combine* that pays for a small SM count. So the trade is 32.8 µs of dispatch for
 875.3 µs of reduced combine at 2 nodes (layer total **−14.7%**), and a much smaller but
-same-signed trade at 4 nodes (**−1.7%**). Decode agrees: at 2 nodes 24 SM wins outright
+same-signed trade at 4 nodes (**−1.7%**). It is not free, which is why the default stays at
+12: the SM budget doubles, and this table was measured at `--prefer-overlap-with-compute=0`,
+where nothing else wants those SMs. **Unpatched** decode agrees: at 2 nodes 24 SM wins outright
 (dispatch 147.3 vs 169.4 µs, redComb 160.1 vs 179.0 µs); at 4 nodes decode dispatch is
 flat across 6/12/24 SM (181.2–184.7 µs) and 24 SM wins on redComb (239.6 vs 253.3 µs, −5.4%).
 
@@ -425,7 +439,7 @@ Same script on both arches — the arch only selects the default cell list.
 # 1. reductive first: one node, 8 ranks. Both b300 blockers appear here, and this
 #    separates "the build is wrong" from "the fabric is wrong" for 2 minutes of cost.
 IMAGE=deepep-v2-efa-official:sm103 WORLD_SIZE=1 NUM_PROCESSES=8 \
-TOKENS=128 NUM_SMS=24 MASTER_PORT=8499 NCCL_DEBUG=INFO \
+TOKENS=128 NUM_SMS=12 MASTER_PORT=8499 NCCL_DEBUG=INFO \
   ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
 ./verify_run.sh /tmp/smoke.node1.log
 
@@ -443,8 +457,11 @@ drift cannot be read as an arm effect):
 
 | arch | cells |
 |---|---|
-| `sm90` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
-| `sm103` | `official` × {8192 @ 24, 128 @ 24, 8192 @ 12} ; `prs` × {8192, 128} @ 24 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `sm90` / `sm103` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+
+Both arches get the **same** list on purpose — a b300-vs-p5en comparison run at different SM
+counts is not a comparison. 12 SM is the operating point (`run_test_ep.sh`'s default), so the
+`prs` arm is measured only there; 24 SM rides along on the `official` arm as an axis.
 
 Override with `CELLS="arm|image|tokens|sms|knobtag|extra env"`, one per line. The `prs`
 arm is skipped with a message if its image is absent, rather than failing nine runs one
@@ -866,7 +883,8 @@ back as a control use `EP_MIN_TOKENS_PER_PART=1`, which **short-circuits** to th
 (dividing by 1 is a *third* geometry, not a control).
 
 **With the PRs applied, 12 SM beats 24 SM for 2-node decode dispatch** (112.7 vs 145.3 µs),
-so the 24-SM recommendation above holds for unpatched code. At 4 nodes the two tie on
+so 24 SM's decode win is an unpatched-code effect, not a standing recommendation — the
+default 12 SM is the right arm for patched decode. At 4 nodes the two tie on
 dispatch + reduced combine (422.4 vs 422.2 µs).
 
 ## Rules that decide whether a number is real
@@ -911,8 +929,8 @@ needs an image rebuild.
    At 2 nodes the axis is closed and has an *interior* optimum at 24 SM
    (dispatch + reduced combine 4898.3 µs, vs 5062.9 at 32 SM). At 4 nodes only
    6/12/24 exist and the curve is still monotone improving
-   (13549.4 → 11898.5 → 11701.0 µs), so the 24-SM recommendation for 4 nodes rests
-   on an unclosed axis.
+   (13549.4 → 11898.5 → 11701.0 µs), so "24 SM is the top of that axis" is unsupported
+   at 4 nodes — the axis is not closed there.
 3. **No `--ignore-local-traffic` run at any scale** (2 runs: 2N, 4N). The launcher
    has the hook (`IGNORE_LOCAL=1`, `run_test_ep.sh:124`) and every GB/s here is the
    **SO** denominator, which counts intra-node destinations. `wire% = SO × (N−1)/N ÷ 50`

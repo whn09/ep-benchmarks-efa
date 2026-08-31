@@ -137,29 +137,29 @@ ARG CUDA_VERSION
 ENV EP_BUILD_ARCH=${TORCH_CUDA_ARCH_LIST}
 ENV EP_BUILD_CUDA=${CUDA_VERSION}
 ENV EP_JIT_CACHE_DIR=/root/.deep_ep
-# DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法。
+# DEEPEP_REF 接受 **branch / tag / 裸 sha** 三种写法，默认 `main`。
 #
-# 默认钉在一个 sha 上，而不是跟 main 漂 —— 理由不是"怕新代码"，是三条：
-#   1) runbook §9 的每个数字都对应一个确定的 tree。跟着 main 漂，重建出来的数字
-#      和文档不符时，你分不清是自己环境搞错了还是代码变了。
-#   2) upstream 会**改写历史**：我们钉过的一个 sha 现在已经不在 main 上了（被重写成
-#      另一个 sha，内容也变了 4 个文件 +41/−19）。钉着的时候这件事是可见的，
-#      漂着的时候完全隐形。
-#   3) `ordered` kernel 在 EFA GDAKI 上是**不正确**的（见 runbook §9.5）。默认 kernel
-#      选择将来一旦变化，漂的镜像会静默跑到错的 kernel 上。
-# 想跟最新就 `--build-arg DEEPEP_REF=main`，下面的 ADD 会自动让 layer cache 失效。
-# 没有这个 ADD 的话，`RUN git fetch origin main` 会命中旧 layer —— 你以为拉到了
-# 最新，实际拿的是上次的代码。这比明着钉死更危险。
+# 默认漂而不钉：上游在高频改 combine / dispatch，钉死的默认值会让"随手建一个镜像"
+# 静默拿到几周前的代码。漂着是安全的，但前提是下面两条同时成立 —— 缺任何一条都不要
+# 让它漂：
+#   1) 紧跟着的那条 ADD 让 layer cache 跟着 ref 指向的 commit 走。没有它，
+#      `RUN git fetch origin main` 只是一条固定的命令串，Docker 会**命中旧 layer**：
+#      你以为拉到了最新，实际拿的是上次的代码。这比明着钉死更危险 —— 钉死是诚实地旧，
+#      缓存命中是假装地新。
+#   2) build_image.sh 先把 ref 解析成 40 位 sha 才传进来，并把 sha 前 7 位写进 image tag。
+#      加上 `git rev-parse HEAD` 落到 /opt/DeepEP/BUILD_REF、run_test_ep.sh 每次开跑前
+#      打印它，"哪棵 tree 产生了这个数字"就始终可查，即使默认值在漂。
 #   注意：ADD 走 GitHub API，未认证限速 60 次/小时；只是用来算 cache key。
+#
+# 要复现一个历史数字，显式给 sha：`./build_image.sh sm90 <40 位 sha>`。这不是可选的
+# 谨慎，有两个具体理由：upstream 会**改写历史**（我们量过的一个 sha 现在已经不在 main
+# 上了，被重写成另一个 sha，内容也差了 4 个文件 +41/−19）；`ordered` kernel 在 EFA
+# GDAKI 上是**不正确**的（见 runbook §9.5），默认 kernel 选择将来一旦变化，跟着 main
+# 的镜像会静默跑到错的 kernel 上。
 #
 # `git clone --depth 1 --branch <sha>` 不接受裸 sha，只能 init + fetch。
 # third-party/fmt 是 submodule，不拉的话 setup.py 和 JIT 都缺 fmt 头文件。
-# 当前值 = 写这行时的 `main`（比上一版 pin 8e7b42e 快进 1 个 commit）。那个 commit
-# 只把**显式**越界的 `num_allocated_qps` 从 `EP_HOST_ASSERT` 改成 clamp 进 [2,17] + 打
-# 一行 `[WARN] DeepEP clamped num_allocated_qps from A to B`。本目录所有臂用的是 auto(0)
-# 或显式 5，两者都在范围内、逐行走同一条路，所以 §9 的数字不受影响（没有重测；
-# `verify_run.sh` 会 grep 那行 WARN，免得将来有人 sweep 到范围外而不自知）。
-ARG DEEPEP_REF=9c1f251118873e5dee9652cdfaf9848753cda7f1
+ARG DEEPEP_REF=main
 ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${DEEPEP_REF} /tmp/deepep-ref.json
 RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
     && git remote add origin https://github.com/amazon-contributing/DeepEP.git \
@@ -178,7 +178,7 @@ RUN mkdir -p /opt/DeepEP && cd /opt/DeepEP && git init -q \
 # ---------------------------------------------------------------------------
 # EFA 上网卡名不是 mlx5_0，DeepEP 用它查网卡属性。
 # 实际名字用 `ibv_devinfo -l` 查，启动容器时按需覆盖。
-# 注意：它只喂给 get_rdma_gbs()。**这条路在本 Dockerfile 默认钉的 9c1f2511 上是通的**
+# 注意：它只喂给 get_rdma_gbs()。**这条路在 9c1f2511 及其后的 main 上是通的**
 # ——`envs.py:306` 先读 `/sys/class/infiniband/<nic>/ports/*/rate`，`ibstat`（EFA 上必
 # 失败，它走 libibumad 而 EFA 没有 ib_umad）只是 fallback，全失败时抛的是带修复建议
 # 的 RuntimeError 而不是 ZeroDivisionError。

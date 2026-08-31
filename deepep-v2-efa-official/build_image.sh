@@ -8,8 +8,9 @@
 #
 # usage: ./build_image.sh [ARCH] [DEEPEP_REF] [TAG]
 #   ARCH        sm90 | sm100 | sm103   (default: probed from nvidia-smi)
-#   DEEPEP_REF  branch / tag / bare sha (default: the Dockerfile's pin)
-#   TAG         image tag (default: deepep-v2-efa-official:<arch>[-<ref7>])
+#   DEEPEP_REF  branch / tag / bare sha (default: the Dockerfile's default, `main`)
+#   TAG         image tag (default: deepep-v2-efa-official:<arch>-<sha7>, plus the
+#               plain :<arch> alias when no ref was asked for)
 #
 # The tag carries the arch on purpose. A Hopper cubin does not run on Blackwell
 # and vice versa, so two arches sharing one tag is the single most expensive
@@ -45,13 +46,39 @@ case "$ARCH" in
   *) echo "unknown ARCH=$ARCH" >&2; exit 1 ;;
 esac
 
-REF_ARGS=()
-NICK=""
-if [ -n "$DEEPEP_REF" ]; then
-  REF_ARGS=(--build-arg "DEEPEP_REF=$DEEPEP_REF")
-  NICK="-$(printf '%s' "$DEEPEP_REF" | tr -c 'a-zA-Z0-9' '-' | cut -c1-7)"
+# Resolve whatever was asked for -- branch, tag, or sha -- to a 40-char sha BEFORE
+# building, and name the image after the sha. Three things depend on doing it here:
+#   - The Dockerfile's default FLOATS (`main`). Without resolution, a plain
+#     `./build_image.sh sm90` would put differently-built code under the same tag
+#     every time upstream pushes, and nothing in `docker images` would say so.
+#   - A wrong sha does not fail the build early; it fails inside the `ADD
+#     .../commits/${DEEPEP_REF}` layer as `invalid response status 422`, several
+#     cached layers in. One API call up front turns that into a one-line error.
+#   - Passing the sha (not `main`) makes the ADD's cache key constant, so rebuilding
+#     the same commit reuses the layer instead of re-resolving it.
+REF_SPEC="${DEEPEP_REF:-main}"
+API="https://api.github.com/repos/amazon-contributing/DeepEP/commits/${REF_SPEC}"
+# The `.sha` media type returns the bare sha as the body, so this needs no jq/gh.
+SHA=$(curl -fsSL -H 'Accept: application/vnd.github.sha' "$API" 2>/dev/null | tr -dc 'a-f0-9' || true)
+if [ "${#SHA}" != 40 ]; then
+  echo "could not resolve DeepEP ref '$REF_SPEC' to a sha." >&2
+  echo "  curl -sSL -H 'Accept: application/vnd.github.sha' $API" >&2
+  echo "A branch/tag typo, a sha that does not exist, or the unauthenticated GitHub" >&2
+  echo "rate limit (60/hour) all land here. For a PR head:" >&2
+  echo "  gh pr view <n> --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid" >&2
+  exit 1
 fi
-TAG="${TAG:-deepep-v2-efa-official:${ARCH}${NICK}}"
+echo "=== DeepEP ref '$REF_SPEC' -> $SHA ==="
+REF_ARGS=(--build-arg "DEEPEP_REF=$SHA")
+TAG_SHA="deepep-v2-efa-official:${ARCH}-${SHA:0:7}"
+TAG="${TAG:-$TAG_SHA}"
+
+# Extra names for the same image id. The sha tag is what you cite and archive; the
+# plain :<arch> alias exists because run_campaign.sh's IMAGE_BASE defaults to it, and
+# it is only attached when no ref was asked for (i.e. this IS the default build).
+ALIASES=()
+[ "$TAG" = "$TAG_SHA" ] || ALIASES+=("$TAG_SHA")
+[ -n "$DEEPEP_REF" ] || ALIASES+=("deepep-v2-efa-official:${ARCH}")
 
 # The installer tarball (~650 MB) is fetched here, not committed. The public bucket
 # serves it under a VERSIONED name, so this needs no rename and no dev bucket:
@@ -90,7 +117,7 @@ if [ "$got" != "## [$EFA_INSTALLER_VERSION]" ]; then
   exit 1
 fi
 
-echo "=== building $TAG  (CUDA $CUDA_VERSION, TORCH_CUDA_ARCH_LIST $TORCH_CUDA_ARCH_LIST, EFA $EFA_INSTALLER_VERSION${DEEPEP_REF:+, DeepEP $DEEPEP_REF}) ==="
+echo "=== building $TAG  (CUDA $CUDA_VERSION, TORCH_CUDA_ARCH_LIST $TORCH_CUDA_ARCH_LIST, EFA $EFA_INSTALLER_VERSION, DeepEP $REF_SPEC @ ${SHA:0:7}) ==="
 set -x
 docker build -t "$TAG" \
   --build-arg "CUDA_VERSION=$CUDA_VERSION" \
@@ -99,13 +126,27 @@ docker build -t "$TAG" \
   "${REF_ARGS[@]}" .
 set +x
 
+if [ "${#ALIASES[@]}" -gt 0 ]; then
+  for a in "${ALIASES[@]}"; do docker tag "$TAG" "$a"; echo "=== also tagged $a"; done
+fi
+
 # Never trust the tag for what code is inside: BUILD_REF is what `git rev-parse
 # HEAD` said at build time. The `ADD` of the GitHub commit API is what makes a
 # moving ref invalidate the layer cache, but a re-tagged image defeats reading.
+built_ref=$(docker run --rm --entrypoint cat "$TAG" /opt/DeepEP/BUILD_REF)
 echo "=== $TAG"
-echo "    DeepEP     $(docker run --rm --entrypoint cat "$TAG" /opt/DeepEP/BUILD_REF)"
+echo "    DeepEP     $built_ref"
 echo "    build arch $(docker run --rm --entrypoint printenv "$TAG" EP_BUILD_ARCH)"
 echo "    build CUDA $(docker run --rm --entrypoint printenv "$TAG" EP_BUILD_CUDA)"
 echo "    EFA inst.  $(docker run --rm --entrypoint printenv "$TAG" EP_EFA_INSTALLER)"
+# The sha was resolved on THIS host before the build; the image's BUILD_REF is what
+# the builder's `git fetch` actually landed on. They can only differ if the ADD layer
+# was served from a cache built against a different ref -- exactly the failure the ADD
+# exists to prevent -- so say so instead of publishing numbers from unknown code.
+if [ "$built_ref" != "$SHA" ]; then
+  echo >&2
+  echo "WARNING: asked for $SHA but the image contains $built_ref." >&2
+  echo "  Rebuild with --no-cache before measuring anything from it." >&2
+fi
 echo
 echo "run it with:  IMAGE=$TAG ./run_test_ep.sh <node_rank> <leader_ip>"

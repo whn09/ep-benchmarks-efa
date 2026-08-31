@@ -195,12 +195,14 @@ SM   dispatch  combine  redComb  d+rC     dispatch  combine  redComb  d+rC
 
 Reps: 24 SM x3 at 2N, 12 SM x3 and 24 SM x2 at 4N; single runs elsewhere.
 
-**24 SM is the operating point at both scales.** At 2 nodes it gives up 32.8 us
-of dispatch (+2.2%) to win 875.3 us of reduced combine (-20.7%), so the layer
-total drops 14.7%. At 4 nodes the same trade is much smaller but the same
-sign: +0.4% dispatch for -2.7% redComb, layer total -1.7%.
+**12 SM is the operating point; 24 SM is a trade this table prices.** At 2 nodes
+24 SM gives up 32.8 us of dispatch (+2.2%) to win 875.3 us of reduced combine
+(-20.7%), so the layer total drops 14.7%. At 4 nodes the same trade is much
+smaller but the same sign: +0.4% dispatch for -2.7% redComb, layer total -1.7%.
+It is not free -- the SM budget doubles, and every row here was measured at
+--prefer-overlap-with-compute=0, where nothing else wants those SMs.
 
-**6 SM is wrong at every scale.** Against the 24 SM operating point, both
+**6 SM is wrong at every scale.** Against 24 SM, both
 metrics stated: at 2 nodes dispatch +49.2% and dispatch+redComb +97.4%; at
 4 nodes dispatch only +1.5% but dispatch+redComb +15.8%. Dispatch alone is
 nearly flat from 12 to 24 SM (+2.2% at 2N, +0.4% at 4N) -- it is reduced
@@ -219,7 +221,9 @@ SM   dispatch  combine  redComb   dispatch  combine  redComb
 At 2 nodes 24 SM wins outright (-13.0% dispatch, -10.6% redComb).
 At 4 nodes dispatch is flat across 6/12/24 SM (181.2-184.7 us, 1.9% spread) and
 only reduced combine moves: 24 SM is -5.4% vs 12 SM. So 24 SM again, but on
-unpatched code only -- see TABLE 7 for what changes once the PRs are applied.
+unpatched code only -- with the PRs of TABLE 7 applied, 12 SM wins 2-node decode
+dispatch outright (112.7 vs 145.3 us) and 4 nodes ties, which is why the default
+and the prs arm both stay at 12 SM.
 
 
 TABLE 7 -- the two pending PRs stack with the backend switch
@@ -490,10 +494,10 @@ shape args        the pin launcher forwards only --num-processes/--num-sms, so
 REPRODUCE
 ---------
   export GIN='NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0'
-  # prefill, 4 nodes, the operating point from TABLE 5
-  NUM_SMS=24 TOKENS=8192 EXTRA_ENV="$GIN" ./run_test_ep.sh
+  # prefill at the operating point (12 SM); TABLE 5 prices 24 SM against it
+  NUM_SMS=12 TOKENS=8192 EXTRA_ENV="$GIN" ./run_test_ep.sh
   # decode
-  NUM_SMS=24 TOKENS=128  EXTRA_ENV="$GIN" ./run_test_ep.sh
+  NUM_SMS=12 TOKENS=128  EXTRA_ENV="$GIN" ./run_test_ep.sh
 
 logs/ holds every run behind these tables, named
 <image>_<N>N_<sm>sm_<tok>tok_<qp>_<flags>_<rep>.node<n>.log, one file per node.

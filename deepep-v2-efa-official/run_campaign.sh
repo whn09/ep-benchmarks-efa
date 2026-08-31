@@ -16,9 +16,9 @@
 #                  A public ip works for ssh and not for the rendezvous.
 #   IMAGE_BASE     image for the `official` arm. Default deepep-v2-efa-official:<arch>
 #   IMAGE_PRS      image for the `prs` arm (amazon-contributing/DeepEP #1 + #2).
-#                  Default deepep-v2-efa-official:<arch>-5a594a5; if that image does
-#                  not exist the prs cells are skipped with a message rather than
-#                  failing 9 runs one at a time.
+#                  Default deepep-v2-efa-official:<arch>-bfbdd15 (PR #2's head); if
+#                  that image does not exist the prs cells are skipped with a message
+#                  rather than failing 9 runs one at a time.
 #   REPS=3         reps are ROTATED (every cell once per rep), not blocked per arm,
 #                  so a slow drift cannot be mistaken for an arm effect.
 #   NUM_PROCESSES=8   local ranks per node
@@ -73,20 +73,23 @@ if [ -z "$ARCH" ]; then
 fi
 
 IMAGE_BASE="${IMAGE_BASE:-deepep-v2-efa-official:${ARCH}}"
-IMAGE_PRS="${IMAGE_PRS:-deepep-v2-efa-official:${ARCH}-5a594a5}"
+IMAGE_PRS="${IMAGE_PRS:-deepep-v2-efa-official:${ARCH}-bfbdd15}"
 
 if [ -z "${MASTER_IP:-}" ]; then
   MASTER_IP=$($SSH -n "$LEADER" 'hostname -I | awk "{print \$1}"' | tr -d ' \r')
   echo "=== MASTER_IP=$MASTER_IP (private ip of $LEADER) ==="
 fi
 
-# Default matrices. SM count is a real perf axis, not a safe default: 12 is the
-# published p5en operating point (and AWS's), 24 is the fastest on p5en and the
-# known-good one on 2 p6-b300. The extra 12-SM prefill cell on sm_103 exists to
-# line up with the only two b300 readings that predate this campaign.
+# Default matrices. 12 SM is the OPERATING POINT on every arch here: it is
+# run_test_ep.sh's default and AWS's published point, so the `prs` arm is measured
+# there and nowhere else. 24 SM is carried on the `official` arm only, as an axis:
+# it buys reduced-combine time (2N layer total -14.7%) at +2.2% dispatch, and with
+# the PRs applied 12 SM wins decode outright, so it is a trade to measure rather
+# than a default to adopt. Keeping the two arches' cell lists identical is
+# deliberate -- a b300-vs-p5en comparison at different SM counts is not one.
 if [ -z "${CELLS:-}" ]; then
   case "$ARCH" in
-    sm90) CELLS="
+    sm90|sm100|sm103) CELLS="
 official|$IMAGE_BASE|8192|12|qpdefault|
 official|$IMAGE_BASE|128|12|qpdefault|
 official|$IMAGE_BASE|8192|24|qpdefault|
@@ -94,14 +97,6 @@ official|$IMAGE_BASE|128|24|qpdefault|
 prs|$IMAGE_PRS|8192|12|prsdflt|
 prs|$IMAGE_PRS|128|12|prsdflt|
 prs|$IMAGE_PRS|128|12|prsmtpp1|EP_MIN_TOKENS_PER_PART=1
-" ;;
-    sm100|sm103) CELLS="
-official|$IMAGE_BASE|8192|24|qpdefault|
-official|$IMAGE_BASE|128|24|qpdefault|
-official|$IMAGE_BASE|8192|12|qpdefault|
-prs|$IMAGE_PRS|8192|24|prsdflt|
-prs|$IMAGE_PRS|128|24|prsdflt|
-prs|$IMAGE_PRS|128|24|prsmtpp1|EP_MIN_TOKENS_PER_PART=1
 " ;;
   esac
 fi
@@ -115,7 +110,9 @@ have_prs=1
 if ! $SSH -n "$LEADER" "docker image inspect $IMAGE_PRS >/dev/null 2>&1"; then
   have_prs=0
   echo "=== $IMAGE_PRS absent on $LEADER -- skipping the prs arm."
-  echo "    Build it with: ./build_image.sh $ARCH 5a594a5db2d1b7c45c60c82b0cf026e9440886a4"
+  echo "    Build it with: ./build_image.sh $ARCH bfbdd15ff448783f877cb2210cb3246c8452b05e"
+  echo "    (that is PR #2's head as of 2026-08-31; a rebase moves it --"
+  echo "     gh pr view 2 --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid)"
 fi
 
 port=$((PORT_BASE))

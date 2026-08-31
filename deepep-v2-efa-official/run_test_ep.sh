@@ -19,9 +19,12 @@
 #                    It IS a free performance axis: the auto path allocates a
 #                    constant 11 GIN contexts regardless of SM count (every log in
 #                    results/ prints `#QPs: 11/11` at 6/12/16/24/32 SM, 2N and 4N),
-#                    so sweeping it cannot land on num_qps < num_ranks. p5en working
-#                    point: 24 SM at both 2 and 4 nodes (runbook 10.2); 12 SM if you
-#                    are on the two decode PRs. b300's SM axis is unmeasured.
+#                    so sweeping it cannot land on num_qps < num_ranks. The default
+#                    12 is the working point (also AWS's published one). 24 SM is a
+#                    trade, not an upgrade: it buys reduced-combine time (2N layer
+#                    total -14.7%) at +2.2% dispatch and double the SM budget, and
+#                    with the two decode PRs applied 12 SM wins decode outright
+#                    (runbook 10.2). b300's SM axis is unmeasured.
 #   MASTER_PORT      use a DIFFERENT port per repetition: a killed run leaves a
 #                    TCPStore listener behind and the next one wedges in rendezvous.
 #   EP_MIN_TOKENS_PER_PART / EP_NUM_SUB_PARTS / EP_MIN_SUB_TOKENS /

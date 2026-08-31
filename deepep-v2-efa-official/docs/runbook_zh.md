@@ -14,13 +14,18 @@ campaign → 验收 → 生成和 §9 一样的表。按顺序走，每一步都
 机型差别只有三处，脚本会自己处理，但你需要知道它们存在（§5.3 讲机制）：CUDA base、
 `TORCH_CUDA_ARCH_LIST`、运行时 `NCCL_IB_HCA=rdmap`。B200 / `sm_100` 的参数已就位，没跑过。
 
-**你会得到什么**（p5en × 2 节点，16 rank，24 SM，`--test-first-only`，全 rank 均值）：
+**你会得到什么**（p5en × 2 节点，16 rank，**12 SM** = `run_test_ep.sh` 的默认，
+`--test-first-only`，全 rank 均值）：
 
 | | 时间 | SO GB/s | 线速占比 |
 |---|---|---|---|
-| prefill dispatch（8192 tok） | 1535.7 µs | 79–80 | 79.6% |
-| prefill reduced combine | 3362.6 µs | 64–79 | — |
-| decode dispatch（128 tok） | 147.3 µs | — | — |
+| prefill dispatch（8192 tok） | 1502.9 µs | 81.2 | 81.2% |
+| prefill reduced combine | 4237.9 µs | — | — |
+| decode dispatch（128 tok） | 169.4 µs | — | — |
+
+SM 数是一根真实的性能轴，不是安全默认值 —— **24 SM 换的是 combine 时间**（dispatch 只
++2.2%，reduced combine −20.7%），而打了 §9.6 那两个 PR 之后 decode 反而 12 SM 更好。
+整条轴和取舍在 §10.2；§9.1–9.4 的表是在 24 SM 上量的，各自都标了 SM 数。
 
 **一件必须先知道的事**：容器里必须有
 `NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0`。这两个变量决定 NCCL 用不用 GDAKI ——
@@ -232,8 +237,8 @@ decode 的 part 几何有两个待合 PR（数据在 §9.6）。#1 是 #2 head �
 
 ```bash
 gh pr view 2 --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid
-./build_image.sh sm103 5a594a5db2d1b7c45c60c82b0cf026e9440886a4
-# -> deepep-v2-efa-official:sm103-5a594a5   （run_campaign.sh 默认找这个 tag）
+./build_image.sh sm103 bfbdd15ff448783f877cb2210cb3246c8452b05e
+# -> deepep-v2-efa-official:sm103-bfbdd15   （run_campaign.sh 默认找这个 tag）
 ```
 
 PR head 会随 rebase 变，所以先用 `gh pr view` 取当前值再建。只关心 prefill 的话这条臂可以
@@ -298,7 +303,7 @@ errno 95，这是对的**（它们不是 EFA 设备），要做的是让 NCCL �
 
 ```bash
 IMAGE=deepep-v2-efa-official:sm90 WORLD_SIZE=1 NUM_PROCESSES=8 \
-TOKENS=128 NUM_SMS=24 MASTER_PORT=8499 NCCL_DEBUG=INFO \
+TOKENS=128 NUM_SMS=12 MASTER_PORT=8499 NCCL_DEBUG=INFO \
   ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
 ./verify_run.sh /tmp/smoke.node1.log
 ```
@@ -314,7 +319,7 @@ TOKENS=128 NUM_SMS=24 MASTER_PORT=8499 NCCL_DEBUG=INFO \
 # node 1（worker）：./run_test_ep.sh 1 <leader 私网IP>
 # node 0（leader）：./run_test_ep.sh 0 <leader 私网IP>
 IMAGE=deepep-v2-efa-official:sm90 WORLD_SIZE=2 NUM_PROCESSES=8 \
-TOKENS=8192 NUM_SMS=24 MASTER_PORT=8500 IGNORE_LOCAL=1 TEST_FIRST_ONLY=1 \
+TOKENS=8192 NUM_SMS=12 MASTER_PORT=8500 IGNORE_LOCAL=1 TEST_FIRST_ONLY=1 \
   ./run_test_ep.sh <node_rank> <leader_ip>
 ```
 
@@ -330,7 +335,7 @@ GDAKI 那两个变量**不用写**：`run_test_ep.sh` 的 `GIN_ENV` 默认就是
 ```bash
 python3 -u /opt/DeepEP/tests/elastic/test_ep.py \
   --num-processes=8 --num-tokens=$TOKENS --hidden=7168 --num-topk=8 \
-  --num-experts=256 --num-sms=24 --allow-hybrid-mode=1 \
+  --num-experts=256 --num-sms=12 --allow-hybrid-mode=1 \
   --prefer-overlap-with-compute=0 --test-first-only --ignore-local-traffic
 ```
 
@@ -433,8 +438,11 @@ NODES="<leader> <worker>" ./run_campaign.sh
 
 | arch | cells |
 |---|---|
-| `sm90` | `official` × {8192, 128} tok × {12, 24} SM；`prs` × {8192, 128} tok @ 12 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
-| `sm103` | `official` × {8192 @ 24, 128 @ 24, 8192 @ 12}；`prs` × {8192, 128} @ 24 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `sm90` / `sm103` | `official` × {8192, 128} tok × {12, 24} SM；`prs` × {8192, 128} tok @ 12 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+
+两个 arch 用**同一张** cell 表是故意的 —— 两边 SM 数不一样的话，b300 和 p5en 就不可比了。
+**12 SM 是工作点**（`run_test_ep.sh` 的默认），所以 `prs` 臂只在 12 SM 上量；24 SM 只挂在
+`official` 臂上，作为一根轴（取舍见 §10.2）。
 
 要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env"`，一行一个 cell。`prs` 臂的镜像
 （§4.2）不存在时那几个 cell **整条跳过并打一行提示**，不会一个一个失败。
@@ -525,10 +533,10 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
 §9.5 / §9.6 的对照实验在 **12 SM** 上做（要和对照臂对齐），每张表自己标了 SM 数。
 
 **出处**：这些数字的镜像 `BUILD_REF` 是 `ec623f3`，并在 `8e7b42e` 上复核过一遍，8 组配对
-全部落在 **0.7%** 以内（`summary.txt` TABLE 8）。Dockerfile 现在默认钉 `9c1f2511`
-（= `8e7b42e` 快进 1 个 commit，那个 commit 只把**显式**越界的 `num_allocated_qps` 从
-assert 改成 clamp；本文所有臂用的是 auto 或显式 5，都在范围内，走同一条路 —— 这是读
-patch 得出的，**没有重测**）。所以按本文重建应当复现这些表。原始日志和生成脚本在
+全部落在 **0.7%** 以内（`summary.txt` TABLE 8）。要按本文重建这些表，**显式给 sha**：
+`./build_image.sh sm90 8e7b42e9b22de4bf70d1de6858db3725c341b628`（`ec623f3` 已被上游改写、
+不可达）。`build_image.sh` 不给 ref 时默认建 `main`，那是另一棵 tree，数字不保证对得上。
+原始日志和生成脚本在
 [`results/p5en_2n4n_20260825/`](../results/p5en_2n4n_20260825/)。
 
 **口径**（每次报速率都要一起报）：
@@ -852,8 +860,9 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 
 ### 10.2 SM 怎么选
 
-**p5en 的工作点：2 节点和 4 节点都用 24 SM。** 8192 tok、type 5、`--test-first-only`、
-全 rank 均值：
+**默认用 12 SM**（`run_test_ep.sh` 的默认值，也是 AWS 公布的工作点，本文所有示例和
+`prs` 臂都用它）。**24 SM 是一个可选的取舍，买的是 combine 时间，不是 dispatch。**
+8192 tok、type 5、`--test-first-only`、全 rank 均值：
 
 | SM | 2 节点 dispatch | 2 节点 reduced combine | 2 节点合计 | 4 节点 dispatch | 4 节点 reduced combine | 4 节点合计 |
 |---|---|---|---|---|---|---|
@@ -864,12 +873,14 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 | 32 | 1576.5 µs | 3486.4 µs | 5062.9 µs | — | — | — |
 
 - **dispatch 从 12 到 24 SM 基本是平的**（2 节点 +2.2%、4 节点 +0.4%），付钱的是 reduced
-  combine。所以拿这点 dispatch 换 combine 总是划算：2 节点用 32.8 µs 的 dispatch 换回
-  875.3 µs 的 reduced combine（层总时间 −14.7%），4 节点 −1.7%。
+  combine。所以**只按 dispatch + combine 一层的总时间算**，24 SM 是赚的：2 节点用 32.8 µs
+  的 dispatch 换回 875.3 µs 的 reduced combine（层总时间 −14.7%），4 节点 −1.7%。但它不是
+  免费的 —— 12 个 SM 的预算翻倍，通信要和 compute overlap 时这部分算力就拿不回来了，
+  而本表是 `--prefer-overlap-with-compute=0` 下量的。所以默认留在 12。
 - **6 SM 在任何规模上都是错的选择**（相对 24 SM，两个口径都给）：2 节点 dispatch +49.2%、
   dispatch+redComb +97.4%；4 节点 dispatch 只 +1.5%，但 dispatch+redComb +15.8%。两个口径
   差这么远，正是因为付钱的是 reduced combine —— 引用时必须说清是哪一个。
-- **decode（128 tok）也选 24 SM**：2 节点 dispatch 169.4 → 147.3 µs（−13.0%）、reduced
+- **未打补丁的 decode（128 tok）同样偏向 24 SM**：2 节点 dispatch 169.4 → 147.3 µs（−13.0%）、reduced
   combine 179.0 → 160.1 µs（−10.6%）；4 节点 dispatch 在 6/12/24 SM 上是平的
   （181.2–184.7 µs，散布 1.9%），只有 reduced combine 动，24 SM 比 12 SM 好 5.4%
   （253.3 → 239.6 µs）。
@@ -877,8 +888,9 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
   4 节点两档在 dispatch + reduced combine 上打平（422.4 vs 422.2 µs）。所以
   `run_campaign.sh` 的 `prs` 臂默认跑 12 SM。
 - **这张表别搬到 b300**：SM 轴在本镜像的 `sm_103` 上还没扫过（§11 第 8 条）。另一个镜像上的
-  观测是 clamp 把 b300 的 SM 曲线压平而不是移动最优点，形状和 p5en 不同。b300 默认起点取
-  24 SM，理由只是"和 p5en 的工作点对齐好比较"，不是量出来的最优点。
+  观测是 clamp 把 b300 的 SM 曲线压平而不是移动最优点，形状和 p5en 不同。所以 b300 的默认
+  cell 表和 p5en 完全一样（工作点 12 SM，24 SM 作为轴），不是因为量过，而是因为两边取不同
+  SM 数就没法比。
 
 ### 10.3 环境变量
 
@@ -910,7 +922,7 @@ launcher / driver 侧（不是容器内变量）：
 | `TEST_FIRST_ONLY` | `1` | `--test-first-only` = FP8 dispatch @ `expert_alignment=128`（`enumerate_ep_modes()` 第一项）。设 `0` 是跑整个模式笛卡尔积，几小时 |
 | `EXTRA_ENV` | `"NAME=VALUE …"` | 一次性 env 钩子，用来做单变量 A/B。同名变量会**顶掉** `GIN_ENV` 的默认值（脚本显式丢弃重复项并打一行提示，不依赖 docker 怎么处理重复的 `-e`） |
 | `NODES` | `"<leader> <worker>"` | `run_campaign.sh` 的节点列表（ssh 别名或 IP），顺序即 node rank |
-| `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-5a594a5` | 两条臂的镜像 tag；`IMAGE_PRS` 不存在时那几个 cell 整条跳过 |
+| `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-bfbdd15` | 两条臂的镜像 tag；`IMAGE_PRS` 不存在时那几个 cell 整条跳过 |
 | `GIN_ENV` | 那对 GIN 变量（**两个脚本共同的默认值**） | 置空即 type-2 对照臂，tag 相应写 `_type2`。`run_campaign.sh` 按 `GIN_ENV` 透传而不折进 `EXTRA_ENV`，否则置空会被子脚本的默认值改回 type 5 而 tag 仍写 `_type2` |
 | `REPS` / `CELLS` / `PORT_BASE` / `LOGDIR` | `3` / arch 默认表 / `8500` / `~/epruns` | `CELLS` 一行一个 cell |
 
@@ -926,7 +938,7 @@ launcher / driver 侧（不是容器内变量）：
    那一格在 V1 那边，不用重跑本目录的 campaign。
 2. **4 节点的 `--num-sms` 轴上界没封**（2 次 run：4N/16 SM、4N/32 SM）。2 节点已经封死且
    最优点在**内部**（24 SM 4898.3 µs，32 SM 反而 5062.9）；4 节点只有 6/12/24，曲线还在
-   单调变好，所以"4 节点也用 24 SM"站在一条没封的轴上。
+   单调变好，所以 4 节点上"24 SM 是这根轴的头"这句话没有证据 —— 轴还没封。
 3. **没有单机基线**（1 次 run）。本目录全部是 ≥ 2 节点，所以 DeepEP 自身的 kernel 开销和
    跨机 EFA 开销从来没分开过。
 4. **combine 慢的那台机器跟机器还是跟角色**（1 次 run，把 node rank 对调）。§9.4 的分层在
@@ -1043,13 +1055,17 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null   # 认清哪份是
      && test -e "$NCCL_LIB/libnccl.so.2" \
      && LIBRARY_PATH="$NCCL_LIB:${LIBRARY_PATH:-}" python3 setup.py install
    ```
-6. **DeepEP 版本用 `DEEPEP_REF`（branch / tag / 裸 sha 都接受），默认钉一个 sha。**
-   `git clone --depth 1 --branch <sha>` 不接受裸 sha，所以只能 init + fetch。钉 sha 的三个
-   理由：§9 每个数字都对应一个确定的 tree，重建对不上时才分得清是环境问题还是代码变了；
-   upstream 会**改写历史**（我们钉过的一个 sha 现在已经不在 `main` 上，钉着的时候这件事是
-   可见的、漂着的时候完全隐形）；`ordered` kernel 在 EFA GDAKI 上不正确（§9.5），默认 kernel
-   选择哪天变了，漂的镜像会静默跑到错的 kernel 上。想跟最新就
-   `--build-arg DEEPEP_REF=main`。
+6. **DeepEP 版本用 `DEEPEP_REF`（branch / tag / 裸 sha 都接受），默认 `main`。**
+   `git clone --depth 1 --branch <sha>` 不接受裸 sha，所以只能 init + fetch。默认漂而不钉，
+   因为上游在按周改 combine / dispatch，钉死的默认值会让"随手建一个镜像"静默拿到几周前
+   的代码。让它漂着仍然可追溯，靠的是把 tree 的身份记在三个地方而不是记在 `ARG` 里：
+   `build_image.sh` 在构建**之前**把 ref 解析成 40 位 sha，镜像名叫 `…:<arch>-<sha7>`；
+   下一条讲的那个 `ADD` 让 layer cache 跟着 commit 走；`BUILD_REF` 落在镜像里、每条日志都打
+   （`build_image.sh` 还会把两者对一遍，不一致就告警）。**要复现一个已发布的数字就显式给
+   sha**（`./build_image.sh sm90 <sha>`）—— 理由有两条很具体：upstream 会**改写历史**
+   （§9 量的 `ec623f3` 现在已经不在 `main` 上，被重写成 `cc55cce` 且内容有变）；`ordered`
+   kernel 在 EFA GDAKI 上不正确（§9.5），默认 kernel 选择哪天变了，跟着 main 的镜像会静默
+   跑到错的 kernel 上。
 7. **那个 `ADD` 不是装饰。**
    ```dockerfile
    ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${DEEPEP_REF} /tmp/deepep-ref.json
@@ -1068,15 +1084,18 @@ find / -name 'libnccl.so.2' -not -path '/proc/*' 2>/dev/null   # 认清哪份是
     NVSHMEM 是 `setup.py` 的硬依赖，只跑 v2 也要装；NCCL 用 2.31+（低于 2.31 时 DeepEP 断言
     编译期与运行期版本严格相等）。
 
-**怎么知道上游推了新代码**（一条命令，不用建镜像）：
+**怎么知道手上的镜像落后了**（一条命令，不用建镜像）。默认值漂着，所以要比的不是
+Dockerfile 而是**镜像里的 `BUILD_REF`**：
 
 ```bash
-PINNED=$(grep -oE '^ARG DEEPEP_REF=\S+' Dockerfile | cut -d= -f2)
+HAVE=$(docker run --rm --entrypoint cat deepep-v2-efa-official:sm90 /opt/DeepEP/BUILD_REF)
 TIP=$(git ls-remote https://github.com/amazon-contributing/DeepEP.git refs/heads/main | cut -f1)
-[ "$PINNED" = "$TIP" ] && echo "up to date" || echo "main 已前进：$PINNED -> $TIP，重测后再 bump"
+[ "$HAVE" = "$TIP" ] && echo "up to date ($HAVE)" || echo "main 已前进：$HAVE -> $TIP"
 ```
 
-流程是**先量后 bump**，不是自动跟随：`main` 前进 → 跑 §9 的对照臂 → 确认在噪声内 → 改默认值。
+`main` 前进不等于表要跟着改：流程是**先量后改**——建新 sha 的镜像 → 和旧 sha 的镜像跑同一组
+对照臂 → 确认在噪声内 → 才更新 §9 的数字，并在表里写清 sha。两个镜像的 tag 天然带 sha
+（`…:sm90-<sha7>`），所以两条臂不会互相覆盖。
 
 ---
 
