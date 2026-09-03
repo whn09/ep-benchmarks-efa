@@ -80,35 +80,48 @@ quoting a cell. Same Dockerfiles and launchers work on both instances; only
 ## Side-by-side results
 
 **What bold means in the three results tables below:** exactly the best cell in that column,
-compared **only within the same config group** — the 2026-05/BF16 rows and the
-2026-08/2026-09 GDAKI rows are different shapes and different clocks (see each table's
-footnote), so each group is bolded on its own. The two GDAKI rows are one group: same
-bench, same 8192/FP8 or 128-token shape, differing in SM count, so they are bolded
-against each other. Two bold cells in a column means a
-genuine tie; no bold at all means no arm is a defensible winner there. Near-ties are
-called out in the prose, not by bold.
-**⭐ marks the fastest stack on that hardware among the rows the table's own config
-statement admits.** In the decode table that admits both GDAKI rows (the shape is
-already 256 experts there), and the 2026-09 row holds three of the six ⭐ — its clock
-and its combine variant are *pessimistic* relative to the rows it beats, which is why
-the stars stand; footnote § works through that. It does **not** admit either GDAKI row
-in the throughput table: no GDAKI campaign ever ran 4096 tokens, so those 8192-token
-FP8 cells cannot be starred against a 4096/BF16 column, however large they are.
+compared **only within the same config group**, and every row label names its own group's
+shape so the grouping is readable off the table instead of out of a footnote. The 2026-05
+rows are 4096 tokens / BF16 dispatch; the 2026-08 and 2026-09 GDAKI rows are 8192 tokens /
+FP8 dispatch in the throughput table and the 128-token shape in the decode one, on later
+clusters and a different clock. The two GDAKI rows are one group — same bench, same shape,
+differing only in SM count — so they are bolded against each other. A throughput column
+therefore carries **two bold cells, one per group, and that is not a tie**; two bold cells
+*inside one group* are. No bold in a group means no arm there is a defensible winner.
+Near-ties are called out in the prose, not by bold.
+
+**⭐ marks the fastest stack measured on that hardware, and it is only awarded where the
+comparison that would decide it has actually been run** — either the rows share a shape,
+or the shape difference between them has itself been measured. Where neither holds, the
+column carries **no ⭐ at all**: the star is withheld from *both* sides, not just from the
+newer row. That silences all four p5en and b300 columns of the throughput table, DeepEP
+V1's included — no GDAKI campaign ever ran 4096 tokens and DeepEP V1 has no 8192-token
+run, so V1's 109.84 GB/s and the 2026-09 row's 140.25 are not each other's rivals in
+either direction, and neither number is evidence about the other. The two p5 columns keep
+V1's ⭐ because the GDAKI rows have no p5 cells at all, so there is nothing there to
+withhold it for. The decode table has no such hole: its shape difference is 288 experts
+vs 256, and that one *is* measured on the same nodes (‡ re-runs our arm at 288 and quotes
+the result), so its stars are ordinary comparisons. The 2026-09 row holds three of the six
+— its clock and its combine variant are *pessimistic* relative to the rows it beats, which
+is why those stars stand; footnote § works through that.
 
 ### Normal mode / "throughput" — RDMA bandwidth (per-rank effective)
 
-Test config: 4096 tokens, hidden 7168, top-k 8, ~256 experts, FP8 →
-BF16. Larger numbers = better. *DeepEP V2 row uses the
-`deepep-v2-uccl-style/` launcher so it shares params with the others
-(288 experts, top-8).*
+Test config is **per group, and the row label carries it**: the 2026-05 rows are
+**4096 tokens / BF16 dispatch**, hidden 7168, top-k 8, ~256 experts (their DeepEP V2 row
+uses the `deepep-v2-uccl-style/` launcher, 288 experts, top-8); the 2026-08 and 2026-09
+GDAKI rows are **8192 tokens / FP8 dispatch**, hidden 7168, top-k 8, 256 experts,
+`expert_alignment=128`, at the SM count in the label. Larger numbers = better — but a
+cell is only comparable to the cells of its own group, which is why the p5en and b300
+columns carry no ⭐ for anyone.
 
 | Stack | p5 Dispatch BF16 | p5 Combine | p5en Dispatch BF16 | p5en Combine | **B300 Dispatch BF16** | **B300 Combine** |
 |---|---|---|---|---|---|---|
-| **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** ⭐ | **53.92 GB/s** ⭐ | **62.54 GB/s** ⭐ | **58.48 GB/s** ⭐ | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
-| UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | 90.03 GB/s | 58.99 GB/s |
-| DeepEP V2 + aws-ofi-nccl GIN (CPU-proxy, 2026-05) | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | ~~4 GB/s~~ | ~~21-26 GB/s~~ |
-| **DeepEP V2 + EFA GDAKI** (route B, 24 SM b300 / 12 SM p5en, 2026-08) † | — | — | **81.25 GB/s** | 65.75 GB/s | 125 GB/s | 131 GB/s |
-| **DeepEP V2, released EFA 1.50.0 + 4 upstream PRs** (24 SM b300 / 12 SM p5en, 2026-09) § | — | — | **81.00 GB/s** (1506.0 µs) | **73.44 GB/s** (3192.4 µs) | **140.25 GB/s** (872.1 µs) | **138.81 GB/s** (1689.3 µs) |
+| **DeepEP V1 + amazon NVSHMEM** (2026-05, 4096 tok / BF16) | **59.94 GB/s** ⭐ | **53.92 GB/s** ⭐ | **62.54 GB/s** | **58.48 GB/s** | **109.84 GB/s** | **101.72 GB/s** |
+| UCCL-EP (2026-05, 4096 tok / BF16) | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | 90.03 GB/s | 58.99 GB/s |
+| DeepEP V2 + aws-ofi-nccl GIN (CPU-proxy, 2026-05, 4096 tok / BF16) | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | ~~4 GB/s~~ | ~~21-26 GB/s~~ |
+| **DeepEP V2 + EFA GDAKI** (route B, 2026-08, 8192 tok / FP8, 24 SM b300 / 12 SM p5en) † | — | — | **81.25 GB/s** | 65.75 GB/s | 125 GB/s | 131 GB/s |
+| **DeepEP V2, released EFA 1.50.0 + 4 upstream PRs** (2026-09, 8192 tok / FP8, 24 SM b300 / 12 SM p5en) § | — | — | **81.00 GB/s** (1506.0 µs) | **73.44 GB/s** (3192.4 µs) | **140.25 GB/s** (872.1 µs) | **138.81 GB/s** (1689.3 µs) |
 
 † **The `DeepEP V2 + GIN` row above is obsolete — do not quote it.** It is the
 CPU-proxy path from 2026-05. The two GDAKI rows replace it and are **~30× the b300
@@ -206,11 +219,14 @@ configuration") and it is what AWS's reference campaign ran (19 of 19 runs at
 once. **No GDAKI campaign ever ran 4096** — every GDAKI prefill arm is 8192 and every
 decode arm is 128, plus a decode-shape sweep at 1 / 8 / 32 / 512 / 1024. Since DeepEP
 V1 in turn has no 8192-token run, **V2-vs-V1 throughput is unmeasured in either
-direction on both p5en and b300**, which is why the GDAKI rows are bolded only inside
-their own group and carry no ⭐ even though 140.25 > 109.84. The cheap way to close that
-is from the V1 side, not ours: V1 already publishes FP8 dispatch at 4096 (48.17 p5 /
-54.98 p5en, `deepep-v1-efa/README.md`), so **one V1 run at `--num-tokens 8192` with
-FP8 dispatch on the existing image** would make the two rows directly comparable.
+direction on both p5en and b300** — so each group is bolded only inside itself, and
+**nobody holds a ⭐ in those four columns, V1 included**. 140.25 > 109.84 on b300 dispatch
+is two shapes, not a result; a ⭐ on V1's 109.84 would have been the same non-result read
+the other way, which is the one direction of that error a table can make look like
+consensus. The cheap way to close it is from the V1 side, not ours: V1 already publishes
+FP8 dispatch at 4096 (48.17 p5 / 54.98 p5en, `deepep-v1-efa/README.md`), so **one V1 run
+per machine at `--num-tokens 8192` with FP8 dispatch on the existing image** would make
+the two rows directly comparable and decide all four withheld columns at once.
 
 **B300 highlights**: First time on EFA we see >100 GB/s per-rank in
 both directions for V1 (≈ 2.5× upstream IB README's 43 GB/s). UCCL-EP
@@ -393,7 +409,7 @@ doubling.
 
 | Workload | p5.48xlarge | p5en.48xlarge | **p6-b300.48xlarge** |
 |---|---|---|---|
-| **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM | **DeepEP V1** (110 GB/s dispatch, 102 GB/s combine) |
+| **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM | **Undecided — pick by your shape, not by the bigger number.** V1 is **109.84 / 101.72 GB/s** at 4096 tok BF16; DeepEP V2 + the four PRs is **140.25 / 138.81 GB/s** at 8192 tok FP8, 24 SM. Neither stack has ever been run at the other's shape, so neither number is evidence about the other (§). V1 is the safe default at 4096/BF16 and the only one measured on p5; V2 is the only one measured at 8192/FP8 |
 | **MoE inference, decode** (per-token A2A) | pplx-garden | **DeepEP V2 + GDAKI**, released 1.50.0 + the four upstream PRs (105.4/150.8 µs, **256.2 µs step** — 1.82× under pplx, §); UCCL-EP or pplx-garden if you cannot take the PRs | **DeepEP V2 + GDAKI**, released 1.50.0 + the four upstream PRs (118.1/168.3 µs, **286.4 µs step at 12 SM**, fastest b300 dispatch on EFA and just past pplx's 289 µs step, 0 CPU proxy threads, §); **pplx-garden** still wins the combine op alone (149 µs p50) |
 | **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden | **DeepEP V2 + GDAKI, released 1.50.0 + the four upstream PRs** (**0.87/1.69 ms at 8192 tok, 24 SM** — −11.1%/−5.3% against route B at the same SM, §); route B untuned is 0.98/1.79 ms. pplx's 1.7/2.7 ms is at **4096** tok on the old stack, and DeepEP V2 beats UCCL-EP 1.9× at matched 8192/24 SM. Give prefill the SMs: 24 beats 12 by −15% on dispatch and −37% on combine, and combine's curve is not monotone above that (§) |
 | **Provider-portable** (also AMD / CX7 / etc) | UCCL-EP | UCCL-EP | UCCL-EP (B300 NIC selection needs uccl#950 — **now merged**, present at rev `dc676e58`; builds natively for sm_103 with `TORCH_CUDA_ARCH_LIST=10.3`) |

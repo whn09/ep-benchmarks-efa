@@ -284,8 +284,13 @@ def anchor():
                                                  pct(h, t)))
         print()
     if not any_row:
-        print("  no 12 SM stack cell in this campaign (ANCHOR=0?) -- then every")
-        print("  24-vs-12 number here is cross-campaign and carries that risk.")
+        print("  no 12 SM stack cell in this campaign -- so every 24-vs-12 number here")
+        print("  is cross-campaign and carries that risk. It is recoverable without any")
+        print("  GPU time: the 8192-tok anchor cell DID run (rep1, port 8709, exit 0) and")
+        print("  the hosts went unreachable before the fetch, so both nodes still hold")
+        print("  ~/epruns/stacka35285f_2N_12sm_8192tok_qpdefault_nodbg_gin5_ovlp0_rep1")
+        print("  .node{1,2}.log on their EBS home dirs. scp those two in and this section")
+        print("  fills itself in. (The 128-tok anchor cell is the one that failed.)")
         print()
 
 

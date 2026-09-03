@@ -586,8 +586,30 @@ if HAVE_TOP:
     for op in ("dispatch", "combine"):
         row += [G(s24(STACK, op)), N(v24(STACK, op))]
     claim("top",
-          r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\* \(24 SM b300",
+          r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\* \(2026-09, 8192 tok",
           row)
+
+    # DeepEP V1's 2026-05 cells. They are not ours and nothing here recomputes them; they
+    # are declared so the places that print them next to a 2026-09 cell -- to say the two
+    # are NOT comparable -- cannot drift from the row they are quoted off. The asserts below
+    # are what keep that wording honest: the prose only has to withhold the star while our
+    # number is the higher one, and it says so in both directions.
+    V1_B300_D, V1_B300_C = 109.84, 101.72
+    V1_P5EN_D, V1_P5EN_C = 62.54, 58.48
+    claim("top", r"^\| \*\*DeepEP V1 \+ amazon NVSHMEM\*\* \(2026-05",
+          [G(V1_B300_D), G(V1_B300_C), G(V1_P5EN_D), G(V1_P5EN_C)])
+    claim("top", r"^\*\*⭐ marks the fastest stack measured",
+          [G(V1_B300_D), G(s24(STACK, "dispatch"))], span=16)
+    claim("top", r"^\*\*Where 4096 and 8192 each come from",
+          [G(V1_B300_D), G(s24(STACK, "dispatch"))], span=20)
+    claim("top", r"^\| \*\*MoE training\*\*",
+          [G(V1_B300_D), G(V1_B300_C), G(s24(STACK, "dispatch")), G(s24(STACK, "combine"))])
+    # Both the legend and the training row read "140.25 > 109.84 is two shapes, not a
+    # result". That sentence only parses if ours is in fact the larger number; if a
+    # re-measurement or a re-parse inverts it, the honest wording inverts with it.
+    assert s24(STACK, "dispatch") > V1_B300_D and s24(STACK, "combine") > V1_B300_C, \
+        "V1's 4096-token b300 cells now read higher than ours: the withheld-star prose " \
+        "names the numbers in one order and must be rewritten in the other"
 
     claim("top", r"^§ \*\*Same arm and same denominator",
           [N(gs.mb(STACK, 8192, "dispatch"), 1), N(gs.mb(STACK, 8192, "combine"), 1),
