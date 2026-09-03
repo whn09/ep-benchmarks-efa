@@ -1,0 +1,139 @@
+2 x p6-b300.48xlarge (sm_103), EFA 1.50.0 + efa.ko 3.3.0, GIN type 5
+EPRUNS=/Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_sm24_20260903/logs
+12 SM reference campaign: /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_stack_20260903/logs
+
+CONFIG -- read out of the logs, not assumed
+
+  arm       tag SM BUILD_REF                                  #SM    #QPs     world
+  main      24     54fffeff810723f574c574b1790dff189f3c6ffb   24     11/11    16
+  PR #1+#2  24     bfbdd15ff448783f877cb2210cb3246c8452b05e   24     11/11    16
+  PR #8+#9  24     3c737dcf0da5889ba7efd26e05b4808307cc38af   24     13/13    16
+  stack     24     a35285f0af98856625e542df24bd17a985bc05d9   24     13/13    16
+
+  every cell's measured #SM equals the SM in its tag.
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, default geometry, GIN type 5, ovlp=0
+  `d vs main` is against main AT THE SAME SM COUNT; `d vs 12sm` is the
+  same arm across the two SM counts of this campaign.
+
+  op                 arm       SM             us  d vs main  d vs 12sm SO GB/s      per-rep us
+  --------------------------------------------------------------------------------------------
+  dispatch           main      24          896.7                       134-139      896.7
+                     PR #1+#2  24          896.0      -0.1%            134-139      896.0
+                     PR #8+#9  24          872.2      -2.7%            139-141      872.2
+                     stack     24          872.1      -2.7%            140-141      872.1
+
+  expanded dispatch  main      24          893.1                       134-139      893.1
+                     PR #1+#2  24          893.4      +0.0%            134-140      893.4
+                     PR #8+#9  24          873.0      -2.3%            140-140      873.0
+                     stack     24          873.0      -2.3%            140-140      873.0
+
+  cached dispatch    main      24          863.2                       140-143      863.2
+                     PR #1+#2  24          863.9      +0.1%            140-143      863.9
+                     PR #8+#9  24          912.7      +5.7%            133-134      912.7
+                     stack     24          912.4      +5.7%            134-134      912.4
+
+  combine            main      24         1851.7                       117-141      1851.7
+                     PR #1+#2  24         1851.8      +0.0%            117-141      1851.8
+                     PR #8+#9  24         1689.6      -8.8%            136-142      1689.6
+                     stack     24         1689.3      -8.8%            136-142      1689.3
+
+  reduced combine    main      24         2254.8                       99-111       2254.8
+                     PR #1+#2  24         2253.4      -0.1%            100-110      2253.4
+                     PR #8+#9  24         1952.4     -13.4%            116-124      1952.4
+                     stack     24         1953.9     -13.3%            115-124      1953.9
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, default geometry, GIN type 5, ovlp=0
+  `d vs main` is against main AT THE SAME SM COUNT; `d vs 12sm` is the
+  same arm across the two SM counts of this campaign.
+
+  op                 arm       SM             us  d vs main  d vs 12sm SO GB/s      per-rep us
+  --------------------------------------------------------------------------------------------
+  dispatch           main      24          247.3                       7-8          247.3
+                     PR #1+#2  24          152.7     -38.2%            11-12        152.7
+
+  expanded dispatch  main      24          247.4                       7-8          247.4
+                     PR #1+#2  24          153.5     -38.0%            11-12        153.5
+
+  cached dispatch    main      24          228.2                       7-8          228.2
+                     PR #1+#2  24          139.0     -39.1%            12-14        139.0
+
+  combine            main      24          159.7                       21-23        159.7
+                     PR #1+#2  24          159.9      +0.1%            20-22        159.9
+
+  reduced combine    main      24          172.6                       19-21        172.6
+                     PR #1+#2  24          172.4      -0.1%            19-21        172.4
+
+SM EFFECT -- PREFILL (8192 tok): what 12 -> 24 SM buys, per arm
+
+  op                 arm             12sm       24sm          d  SO 12->24
+
+
+
+SM EFFECT -- DECODE (128 tok): what 12 -> 24 SM buys, per arm
+
+  op                 arm             12sm       24sm          d  SO 12->24
+
+
+
+ADDITIVITY -- PREFILL (8192 tok) @ 24 SM
+  expected = main + (#1+#2 - main) + (#8+#9 - main). residual > 0 means
+  the two PRs overlap; < 0 means they compound.
+
+  op                      main     #1+#2     #8+#9  expected     stack residual
+  dispatch               896.7     896.0     872.2     871.6     872.1      0.6  (2% of the larger single win)
+  expanded dispatch      893.1     893.4     873.0     873.3     873.0     -0.3  (-1% of the larger single win)
+  cached dispatch        863.2     863.9     912.7     913.4     912.4     -1.0  (-2% of the larger single win)
+  combine               1851.7    1851.8    1689.6    1689.8    1689.3     -0.4  (-0% of the larger single win)
+  reduced combine       2254.8    2253.4    1952.4    1951.1    1953.9      2.9  (1% of the larger single win)
+  layer total           3151.5    3149.5    2824.7    2822.6    2826.1      3.4  (1% of the larger single win)
+  reps: 1 (the set all four arms share)
+
+ADDITIVITY -- DECODE (128 tok) @ 24 SM
+  expected = main + (#1+#2 - main) + (#8+#9 - main). residual > 0 means
+  the two PRs overlap; < 0 means they compound.
+
+  op                      main     #1+#2     #8+#9  expected     stack residual
+  dispatch           -- not computable: #8+#9, stack not measured here
+  expanded dispatch  -- not computable: #8+#9, stack not measured here
+  cached dispatch    -- not computable: #8+#9, stack not measured here
+  combine            -- not computable: #8+#9, stack not measured here
+  reduced combine    -- not computable: #8+#9, stack not measured here
+  layer total        -- not computable: #8+#9, stack not measured here
+  reps: unrestricted -- an arm is missing at this cell, so there is no
+        shared-rep set to restrict to.
+
+ANCHOR -- this campaign's 12 SM stack cell vs results/b300_stack_20260903
+  Same arm label, same tag scheme, different day. A difference here is
+  drift; it is the error bar on every cross-campaign number in the README.
+
+  op                    tok         here     20260903        d
+
+
+  no 12 SM stack cell in this campaign (ANCHOR=0?) -- then every
+  24-vs-12 number here is cross-campaign and carries that risk.
+
+AUDIT -- reps on disk and rank completeness (n must equal 16)
+
+   8192tok main      12sm -- not run
+   8192tok PR #1+#2  12sm -- not run
+   8192tok PR #8+#9  12sm -- not run
+   8192tok stack     12sm -- not run
+   8192tok main      24sm rep1:16/16
+   8192tok PR #1+#2  24sm rep1:16/16
+   8192tok PR #8+#9  24sm rep1:16/16
+   8192tok stack     24sm rep1:16/16
+    128tok main      12sm -- not run
+    128tok PR #1+#2  12sm -- not run
+    128tok PR #8+#9  12sm -- not run
+    128tok stack     12sm -- not run
+    128tok main      24sm rep1:16/16
+    128tok PR #1+#2  24sm rep1:16/16
+    128tok PR #8+#9  24sm -- not run
+    128tok stack     24sm -- not run
+
+  logs present but EMPTY (in-flight, or died before iteration 1):
+    pr893c737dc_2N_24sm_128tok_qpdefault_nodbg_gin5_ovlp0_rep1 (2 logs, no EP lines)
+
+  no rep was excluded as an outlier.
+

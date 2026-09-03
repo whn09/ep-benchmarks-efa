@@ -90,6 +90,14 @@ gb = _mod(os.path.join(DB, "make_stack_tables.py"), "genb300",
           {"EPRUNS_B300": os.path.join(DB, "logs")}).m
 assert gs.g.EPRUNS != gb.g.EPRUNS, "the two stack generators collapsed onto one log dir"
 
+# The b300 24 SM campaign, which owns the repo README's two b300 throughput cells. Its own
+# driver loads gb as a side effect (for the ANCHOR section), so it must come after gb; it
+# is keyed off EPRUNS_SM24 and its accessors take an explicit SM count.
+D24 = os.path.join(RESULTS, "b300_sm24_20260903")
+g24 = _mod(os.path.join(D24, "make_sm24_tables.py"), "gensm24",
+           {"EPRUNS_SM24": os.path.join(D24, "logs")})
+assert g24.g.EPRUNS not in (gs.g.EPRUNS, gb.g.EPRUNS), "the 24 SM generator reused a log dir"
+
 MAIN, PR12, PR89, STACK = gs.MAIN, gs.PR12, gs.PR89, gs.STACK
 DFLT, SUB1 = gs.DFLT, gs.SUB1
 # same arm labels on both machines, by construction (the stack merge sha is pinned)
@@ -210,6 +218,17 @@ def vb(arm, tok, op, knob=DFLT):
 def lb(arm, tok, knob=DFLT):
     d, c = vb(arm, tok, "dispatch", knob), vb(arm, tok, "reduced combine", knob)
     return None if None in (d, c) else d + c
+
+
+# The b300 24 SM campaign. n=1, so unlike vb() there is no shared-rep intersection to take
+# -- but the SM count is an argument rather than a default, because this campaign's whole
+# point is that 12 and 24 are different measurements of the same arm.
+def v24(arm, op, sm=24, tok=8192):
+    return g24.us(arm, sm, tok, op)
+
+
+def s24(arm, op, sm=24, tok=8192):
+    return g24.so(arm, sm, tok, op)
 
 
 BADD = gb.shared_reps(128, lambda _arm: DFLT)
@@ -508,7 +527,9 @@ if HAVE_TOP:
     GDAKI_PF_12SM_D, GDAKI_PF_12SM_C = 1147.562, 2788.438
     GDAKI_PF_55SM_D = 822.109
     GDAKI_PF_24SM_C, GDAKI_PF_48SM_C, GDAKI_PF_55SM_C = 1783.000, 1883.500, 1760.688
+    GDAKI_PF_24SM_D, GDAKI_PF_48SM_D = 981.092, 809.218
     GDAKI_PF_12SM_C_GB, GDAKI_PF_24SM_C_GB = 84.12, 131.62
+    GDAKI_PF_24SM_D_GB = 124.44
     KINETO_B300_D, KINETO_B300_C = GDAKI_B300_55SM_D, GDAKI_B300_55SM_C
     _g12 = GDAKI_B300_12SM_D + GDAKI_B300_12SM_C
     _g55 = GDAKI_B300_55SM_D + GDAKI_B300_55SM_C
@@ -554,44 +575,73 @@ if HAVE_TOP:
     claim("top", r"^\*\*On p5en, UCCL-EP and pplx-garden are tied",
           [N(_pd1), RATIO2(UCCL_P5EN_D, _pd1), RATIO2(PPLX_P5EN_D, _pd1)], span=4)
 
-    # --- the throughput table's new row: GB/s AND the us behind it, both generated
-    _tp = [(gs, sp, "p5en"), (gb, vb, "b300")]
+    # --- the throughput table's row: GB/s AND the us behind it, both generated. The row is
+    # SM-matched to the row above it per machine, so the two halves come from DIFFERENT
+    # campaigns -- p5en at 12 SM from gs, b300 at 24 SM from g24 -- and each half is read
+    # from the generator that owns that SM count. Reading b300 from gb here would silently
+    # republish the 12 SM cells under a 24 SM label.
     row = []
-    for gen, vf, _lbl in _tp:
-        for op in ("dispatch", "combine"):
-            only = basis(8192) if gen is gs else None
-            row += [G(gen.so(STACK, 8192, op, DFLT, only)), N(vf(STACK, 8192, op))]
-    claim("top", r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\*, 12 SM",
+    for op in ("dispatch", "combine"):
+        row += [G(gs.so(STACK, 8192, op, DFLT, basis(8192))), N(sp(STACK, 8192, op))]
+    for op in ("dispatch", "combine"):
+        row += [G(s24(STACK, op)), N(v24(STACK, op))]
+    claim("top",
+          r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\* \(24 SM b300",
           row)
 
-    claim("top", r"^§ \*\*Same campaign, same arm and same denominator",
+    claim("top", r"^§ \*\*Same arm and same denominator",
           [N(gs.mb(STACK, 8192, "dispatch"), 1), N(gs.mb(STACK, 8192, "combine"), 1),
-           N(gb.mb(STACK, 8192, "combine"), 1)], span=10)
+           N(gb.mb(STACK, 8192, "combine"), 1)], span=16)
 
-    claim("top", r"^\*\*The one column this row does not win",
-          [N(vb(STACK, 8192, "combine")), P(vb(STACK, 8192, "combine"), _bc8),
-           N(_bc8), N(vb(STACK, 8192, "dispatch")),
-           P(vb(STACK, 8192, "dispatch"), _bpd), N(_bpd),
-           P(sp(STACK, 8192, "dispatch"), _ppd), N(_ppd),
-           N(sp(STACK, 8192, "dispatch")),
-           P(sp(STACK, 8192, "combine"), _pc8), N(_pc8),
-           N(sp(STACK, 8192, "combine")),
+    # The two b300 prefill columns at 24 SM, against route B at the same SM and against
+    # this campaign's own unpatched main. Every "ours" value comes from g24; route B's side
+    # stays a constant, so a ratio is never checked against a number this file invented.
+    _24d, _24c = v24(STACK, "dispatch"), v24(STACK, "combine")
+    _24md, _24mc = v24(MAIN, "dispatch"), v24(MAIN, "combine")
+    claim("top", r"^\*\*At 24 SM this row wins both b300 columns",
+          [G(GDAKI_PF_24SM_D_GB), N(GDAKI_PF_24SM_D),
+           G(GDAKI_PF_24SM_C_GB), N(GDAKI_PF_24SM_C),
+           N(_24d), P(_24d, GDAKI_PF_24SM_D),
+           N(_24c), P(_24c, GDAKI_PF_24SM_C),
+           N(_24d + _24c), N(GDAKI_PF_24SM_D + GDAKI_PF_24SM_C),
+           P(_24d + _24c, GDAKI_PF_24SM_D + GDAKI_PF_24SM_C),
+           N(_24md), P(_24d, _24md), N(_24mc), P(_24c, _24mc)],
+          span=9)
+
+    claim("top", r"^\*\*Combine's SM curve is not monotone",
+          [N(GDAKI_PF_12SM_C), N(GDAKI_PF_24SM_C), N(GDAKI_PF_48SM_C), N(GDAKI_PF_55SM_C),
+           N(_24c), P(_24c, GDAKI_PF_55SM_C),
+           N(GDAKI_PF_48SM_D), N(_24d), P(_24d, GDAKI_PF_48SM_D),
+           P(_24d, GDAKI_PF_24SM_D),
+           # the cross-campaign 12 -> 24 cross-validation, both sides on `combine`
+           P(_24mc, vb(MAIN, 8192, "combine")), N(vb(MAIN, 8192, "combine")), N(_24mc),
+           P(GDAKI_PF_24SM_C, GDAKI_PF_12SM_C), N(GDAKI_PF_12SM_C), N(GDAKI_PF_24SM_C),
+           # p5en is untouched on dispatch and all-combine on the win
+           P(sp(STACK, 8192, "dispatch"), _ppd), N(_ppd), N(sp(STACK, 8192, "dispatch")),
+           P(sp(STACK, 8192, "combine"), _pc8), N(_pc8), N(sp(STACK, 8192, "combine")),
            G(gs.so(MAIN, 8192, "combine", DFLT, basis(8192))),
            G(gs.so(STACK, 8192, "combine", DFLT, basis(8192))),
-           # the matched-12 SM prefill comparison against route B's own SM sweep
-           G(GDAKI_PF_12SM_C_GB), N(GDAKI_PF_12SM_C),
-           G(GDAKI_PF_24SM_C_GB), N(GDAKI_PF_24SM_C),
-           P(vb(STACK, 8192, "combine"), GDAKI_PF_12SM_C),
-           P(GDAKI_PF_24SM_C, GDAKI_PF_12SM_C),
-           N(GDAKI_PF_48SM_C), N(GDAKI_PF_55SM_C), N(GDAKI_PF_55SM_D),
-           N(GDAKI_PF_12SM_D), P(vb(STACK, 8192, "dispatch"), GDAKI_PF_12SM_D)],
-          span=26)
+           # the decode-at-24-SM signal that is NOT yet a result
+           P(v24(PR12, "dispatch", tok=128), vb(PR12, 128, "dispatch")),
+           N(vb(PR12, 128, "dispatch")), N(v24(PR12, "dispatch", tok=128)),
+           P(v24(MAIN, "dispatch", tok=128), vb(MAIN, 128, "dispatch")),
+           N(vb(MAIN, 128, "dispatch")), N(v24(MAIN, "dispatch", tok=128))],
+          span=22)
+    # The row's two b300 cells are now claimed as wins on both ops. Assert the signs, so the
+    # prose cannot survive a re-measurement that flips one of them.
+    assert _24d < GDAKI_PF_24SM_D and _24c < GDAKI_PF_24SM_C, \
+        "b300 no longer wins both prefill columns at 24 SM: reword the § footnote"
+    assert _24c < GDAKI_PF_55SM_C, "route B's 55 SM combine now wins: fix the 'every point' claim"
+    assert _24d > GDAKI_PF_48SM_D, "our dispatch now beats route B's optimum too: say so"
 
     # the two Recommendations cells that now quote a step
     claim("top", r"^\| \*\*MoE inference, decode\*\*",
           [N(_pd1), N(_pc1), N(_pd1 + _pc1), RATIO2(PPLX_P5EN, _pd1 + _pc1),
            N(_bd1), N(_bc1), N(_bd1 + _bc1)])
-    claim("top", r"^\| \*\*MoE inference, prefill\*\*", [N(vb(STACK, 8192, "dispatch"))])
+    claim("top", r"^\| \*\*MoE inference, prefill\*\*",
+          [N(v24(STACK, "dispatch") / 1000.0, 2), N(v24(STACK, "combine") / 1000.0, 2),
+           P(v24(STACK, "dispatch"), GDAKI_PF_24SM_D),
+           P(v24(STACK, "combine"), GDAKI_PF_24SM_C)])
     claim("top", r"^\| \*\*Very large EP", [N(_pd1 + _pc1), N(_bd1 + _bc1)])
 
 # §9.10's table is only comparable if the whole thing is one knob: assert the doc's own

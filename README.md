@@ -107,8 +107,8 @@ BF16. Larger numbers = better. *DeepEP V2 row uses the
 | **DeepEP V1 + amazon NVSHMEM** | **59.94 GB/s** ⭐ | **53.92 GB/s** ⭐ | **62.54 GB/s** ⭐ | **58.48 GB/s** ⭐ | **109.84 GB/s** ⭐ | **101.72 GB/s** ⭐ |
 | UCCL-EP | 48.72 GB/s | 13.92 GB/s | 60.64 GB/s | 17.11 GB/s | 90.03 GB/s | 58.99 GB/s |
 | DeepEP V2 + aws-ofi-nccl GIN (CPU-proxy, 2026-05) | ~2 GB/s | ~12 GB/s | 5 GB/s | 20 GB/s | ~~4 GB/s~~ | ~~21-26 GB/s~~ |
-| **DeepEP V2 + EFA GDAKI** (route B, 24 SM b300 / 12 SM p5en, 2026-08) † | — | — | **81.25 GB/s** | 65.75 GB/s | 125 GB/s | **131 GB/s** |
-| **DeepEP V2, released EFA 1.50.0 + 4 upstream PRs**, 12 SM both (2026-09) § | — | — | **81.00 GB/s** (1506.0 µs) | **73.44 GB/s** (3192.4 µs) | **128.90 GB/s** (947.8 µs) | 83.21 GB/s (2816.0 µs) |
+| **DeepEP V2 + EFA GDAKI** (route B, 24 SM b300 / 12 SM p5en, 2026-08) † | — | — | **81.25 GB/s** | 65.75 GB/s | 125 GB/s | 131 GB/s |
+| **DeepEP V2, released EFA 1.50.0 + 4 upstream PRs** (24 SM b300 / 12 SM p5en, 2026-09) § | — | — | **81.00 GB/s** (1506.0 µs) | **73.44 GB/s** (3192.4 µs) | **140.25 GB/s** (872.1 µs) | **138.81 GB/s** (1689.3 µs) |
 
 † **The `DeepEP V2 + GIN` row above is obsolete — do not quote it.** It is the
 CPU-proxy path from 2026-05. The two GDAKI rows replace it and are **~30× the b300
@@ -142,11 +142,17 @@ methodology and per-row provenance for this table:
 **The UCCL-EP row is a same-stack re-check and reproduces within 5%**
 (4096 tok BF16: 94.42 vs 90.03 dispatch, 56.93 vs 58.99 combine).
 
-§ **Same campaign, same arm and same denominator as the § row of the decode table, at
-8192 tokens** — released EFA 1.50.0 package, upstream `54fffef` + PRs #1+#2+#8+#9
-(`a35285f`), 2 nodes / 16 ranks, FP8 dispatch, `NCCL_GIN_TYPE=5
-NCCL_SYM_GIN_KERNELS_ENABLE=0`, `--prefer-overlap-with-compute=0`, default part
-geometry, 3 rotated reps per cell. GB/s is `test_ep.py`'s **SO**, the all-rank mean
+§ **Same arm and same denominator as the § row of the decode table, at 8192 tokens** —
+released EFA 1.50.0 package, upstream `54fffef` + PRs #1+#2+#8+#9 (`a35285f`), 2 nodes /
+16 ranks, FP8 dispatch, `NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0`,
+`--prefer-overlap-with-compute=0`, default part geometry. **This row is now SM-matched to
+the † row on both machines**: the b300 cells are **24 SM**
+([`results/b300_sm24_20260903`](deepep-v2-efa-official/results/b300_sm24_20260903), 16/16
+ranks pooled from both nodes, **n=1** — the campaign was cut off at rep 1 when the nodes
+were released, so read these two cells with the ~0.5% cross-rep spread the same arm showed
+over 3 reps at 12 SM as their only error bar), and the p5en cells are **12 SM**, 3 rotated
+reps ([`results/p5en_stack_20260831`](deepep-v2-efa-official/results/p5en_stack_20260831)).
+GB/s is `test_ep.py`'s **SO**, the all-rank mean
 (the same statistic as the † row, so **halve it for a wire rate**), and its byte
 denominator is **399.8 MB/rank on dispatch and 767.1–767.2 MB/rank on combine** — the µs in
 each cell is the primary number, the GB/s is that time against those bytes. `combine`
@@ -155,28 +161,37 @@ the decode table quotes. **p5en Dispatch is bold twice because it is one measure
 twice**: 81.25 GB/s = 1502.9 µs in the 2026-08 campaign, 81.00 = 1506.0 µs here, and the
 four PRs do not touch p5en prefill dispatch at all.
 
-**The one column this row does not win is B300 Combine, and the SM count is the reason —
-measured on the † arm itself, not inferred.** This row runs **12 SM on both machines**
-where the † row gives b300 24, and the † campaign has its own **12 SM** prefill cell
-(`results/b300_20260813/b300_pfsm_p1_12*`, 16 ranks pooled over both nodes; the same
-tuned arm, confirmed by its 24 SM cell reproducing the published one to 0.3% —
-131.62 GB/s / 1783.0 µs vs 131 / 1788.1): **84.12 GB/s / 2788.4 µs of combine**, against
-this row's 83.21 / 2816.0. **At matched SM the two arms are at parity on combine, +1.0% in
-time**, so the whole 131-vs-83.21 column difference is 12 → 24 SM — worth **−36.1%** on
-the † arm's own sweep (2788.4 → 1783.0 µs), which then goes back *up* to 1883.5 µs at 48
-before 1760.7 at 55, i.e. combine's SM curve is not monotone. This row is also **−3.8%**
-against its own unpatched `54fffef` (2927.4 µs) at matched SM. Note what the sweep also
-says about the † row itself: **24 SM is not route B's best prefill point, 55 SM is**
-(822.1 µs dispatch / 1760.7 combine), so a claim of the form "12 SM + the PRs beats route
-B" holds against the config the † row publishes and against route B at 12 SM, not against
-route B at its own optimum.
-Dispatch has the opposite property — **947.8 µs at 12 SM already beats the 978.8 µs the
-† row gets from 24**, and at matched 12 SM it is **−17.4%** against that campaign's
-1147.6 µs, of which PR #8+#9 is −10.3% (vs this campaign's own main, 1056.2 µs). That win
-is **b300-only**: on p5en the identical arm moves prefill dispatch by **+0.2%** (1503.6 →
-1506.0 µs), and all of p5en's prefill win is combine, **−11.7%** (3613.7 → 3192.4 µs,
-65.38 → 73.44 GB/s). A 24 SM b300 cell on this arm is still unrun; what it would settle is
-now only whether the PRs' combine win survives at 24 SM.
+**At 24 SM this row wins both b300 columns, and the margin on combine is the larger of
+the two.** Against the † campaign's own 16-rank 24 SM cell — `results/b300_20260813/`
+`b300_pfsm_p1_24*`, which reproduces the 8-rank pair the † row publishes to **0.3%**
+(124.44 GB/s / 981.1 µs and 131.62 / 1783.0 vs 125 / 978.8 and 131 / 1788.1) — this row is
+**−11.1% on dispatch** (872.1 vs 981.1 µs) and **−5.3% on combine** (1689.3 vs 1783.0),
+**−7.3%** on the two summed (2561.4 vs 2764.1 µs). Against its own unpatched `54fffef` at
+the same 24 SM it is **−2.7%** on dispatch (896.7 µs) and **−8.8%** on combine
+(1851.7 µs); the prefill win is **entirely PR #8+#9** — #1+#2 moves both ops by ≤0.1% and
+the stack's additivity residual is ≤1% of the larger single win.
+
+**Combine's SM curve is not monotone, and that is what decides how far this row's combine
+win generalises.** The † arm's own sweep goes 2788.4 µs at 12 SM → 1783.0 at 24 → back
+*up* to 1883.5 at 48 → 1760.7 at 55, so its best combine point is 55 SM, and this row's
+1689.3 µs beats **every point it swept**, its optimum included (−4.1% vs 1760.7).
+**Dispatch is the op where that does not hold**: route B's best is 809.2 µs at 48 SM, so
+against route B's optimum this row's 872.1 is **+7.8%**, even though it is −11.1% at
+matched 24. So the honest form of the claim is: SM-matched, both b300 columns; against
+route B tuned to its own best SM per op, combine yes and dispatch no.
+The 12 → 24 SM effect is **cross-campaign here** — the 24 SM run was cut off before its
+12 SM anchor cells, so nothing re-measures 12 SM on the same day — but it **cross-validates
+against a second, independent sweep**: unpatched `54fffef` moves **−36.7%** on combine from
+the 12 SM campaign to the 24 SM one (2927.4 → 1851.7 µs), where the † arm's own sweep, a
+different tree on a different day, measured **−36.1%** (2788.4 → 1783.0). 0.6 pp apart on a
+36% effect is what makes the two campaigns' cells quotable side by side at all.
+On p5en none of this appears: the identical arm moves prefill dispatch by **+0.2%**
+(1503.6 → 1506.0 µs) and all of p5en's prefill win is combine, **−11.7%** (3613.7 →
+3192.4 µs, 65.38 → 73.44 GB/s). The b300 **decode** cells at 24 SM are still unrun for
+#8+#9 and the stack, so whether decode stays SM-flat once the PRs remove its floor is open;
+the one signal from the arms that did run is that it may not — #1+#2's decode dispatch is
+**+19.5% slower** at 24 SM than at 12 (127.8 → 152.7 µs) while unpatched `54fffef` gets
+−10.9% (277.5 → 247.3), i.e. P and D may want different SM counts.
 
 **Where 4096 and 8192 each come from** — because it decides what this table can and
 cannot conclude. **4096 is nobody's chosen shape**: it is both benches' argparse
@@ -192,7 +207,7 @@ once. **No GDAKI campaign ever ran 4096** — every GDAKI prefill arm is 8192 an
 decode arm is 128, plus a decode-shape sweep at 1 / 8 / 32 / 512 / 1024. Since DeepEP
 V1 in turn has no 8192-token run, **V2-vs-V1 throughput is unmeasured in either
 direction on both p5en and b300**, which is why the GDAKI rows are bolded only inside
-their own group and carry no ⭐ even though 128.90 > 109.84. The cheap way to close that
+their own group and carry no ⭐ even though 140.25 > 109.84. The cheap way to close that
 is from the V1 side, not ours: V1 already publishes FP8 dispatch at 4096 (48.17 p5 /
 54.98 p5en, `deepep-v1-efa/README.md`), so **one V1 run at `--num-tokens 8192` with
 FP8 dispatch on the existing image** would make the two rows directly comparable.
@@ -380,7 +395,7 @@ doubling.
 |---|---|---|---|
 | **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM | **DeepEP V1** (110 GB/s dispatch, 102 GB/s combine) |
 | **MoE inference, decode** (per-token A2A) | pplx-garden | **DeepEP V2 + GDAKI**, released 1.50.0 + the four upstream PRs (105.4/150.8 µs, **256.2 µs step** — 1.82× under pplx, §); UCCL-EP or pplx-garden if you cannot take the PRs | **DeepEP V2 + GDAKI**, released 1.50.0 + the four upstream PRs (118.1/168.3 µs, **286.4 µs step at 12 SM**, fastest b300 dispatch on EFA and just past pplx's 289 µs step, 0 CPU proxy threads, §); **pplx-garden** still wins the combine op alone (149 µs p50) |
-| **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden | **DeepEP V2 + GDAKI** (0.98/1.79 ms at **8192** tok, 24 SM) — pplx's 1.7/2.7 ms is at **4096** tok on the old stack, and DeepEP V2 beats UCCL-EP 1.9× at matched 8192/24 SM. Take the four upstream PRs for dispatch even at a low SM budget: **947.8 µs at 12 SM** beats the 24 SM 0.98 ms, though combine still wants the SMs (§) |
+| **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden | **DeepEP V2 + GDAKI, released 1.50.0 + the four upstream PRs** (**0.87/1.69 ms at 8192 tok, 24 SM** — −11.1%/−5.3% against route B at the same SM, §); route B untuned is 0.98/1.79 ms. pplx's 1.7/2.7 ms is at **4096** tok on the old stack, and DeepEP V2 beats UCCL-EP 1.9× at matched 8192/24 SM. Give prefill the SMs: 24 beats 12 by −15% on dispatch and −37% on combine, and combine's curve is not monotone above that (§) |
 | **Provider-portable** (also AMD / CX7 / etc) | UCCL-EP | UCCL-EP | UCCL-EP (B300 NIC selection needs uccl#950 — **now merged**, present at rev `dc676e58`; builds natively for sm_103 with `TORCH_CUDA_ARCH_LIST=10.3`) |
 | **Very large EP (>EP128, low SM budget)** | watch DeepEP V2 + ofi-nccl GIN (still maturing) | **DeepEP V2 + EFA GDAKI** (route B; 341 µs decode step, 12 SM — **256.2 µs** with the four upstream PRs, §) | **DeepEP V2 + EFA GDAKI** (route B; 360.5 µs decode step, 2766.9 µs prefill step @8192 tok — **286.4 µs** decode step with the four upstream PRs at 12 SM, §) |
 
