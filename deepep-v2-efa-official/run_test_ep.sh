@@ -17,9 +17,13 @@
 #                    reports ONE device's rate: correct on p5en (1 EFA per GPU =
 #                    50 GB/s), half the truth on p6-b300 (2 per GPU = 100 GB/s).
 #                    It IS a free performance axis: the auto path allocates a
-#                    constant 11 GIN contexts regardless of SM count (every log in
-#                    results/ prints `#QPs: 11/11` at 6/12/16/24/32 SM, 2N and 4N),
-#                    so sweeping it cannot land on num_qps < num_ranks. The default
+#                    constant `kDefaultGinContextCnt` GIN contexts regardless of SM
+#                    count, so sweeping it cannot land on num_qps < num_ranks. That
+#                    constant is 11 on `main` (every log in
+#                    results/p5en_2n4n_20260825/ prints `#QPs: 11/11` at
+#                    6/12/16/24/32 SM, 2N and 4N) and 13 with PR #9 applied
+#                    (results/p5en_3arm_20260831/), so read it out of the log
+#                    rather than assuming 11. The default
 #                    12 is the working point (also AWS's published one). 24 SM is a
 #                    trade, not an upgrade: it buys reduced-combine time (2N layer
 #                    total -14.7%) at +2.2% dispatch and double the SM budget, and
@@ -36,6 +40,17 @@
 #                    the env is unsafe: the JIT cache key hashes `flags` but NOT
 #                    included header content, so an env-free header patch can serve
 #                    a stale cubin.  See README 'Rules that decide ...' rule 1.
+#   PREFER_OVERLAP=0 value of --prefer-overlap-with-compute. 0 is the working
+#                    point and every published number uses it. It is NOT a
+#                    cosmetic flag: on PR #8+#9 both the channel-clamp removal and
+#                    the forward-warp pairing are gated on
+#                    `not prefer_overlap_with_compute`, so =1 disables both while
+#                    leaving the QP bump and remote-first scheduling live. That is
+#                    what makes a main-vs-#9 pair at =1 a bracket on the other two
+#                    changes without a rebuild. It also changes double-buffering
+#                    and warp counts, so =0 and =1 are DIFFERENT configurations,
+#                    never pool them: run_campaign.sh stamps `_ovlp0` / `_ovlp1`
+#                    into the log name and verify_run.sh cross-checks it.
 #   IGNORE_LOCAL=1   pass --ignore-local-traffic, so the reported scale-out GB/s
 #                    is a wire rate. WITHOUT it, SO includes intra-node traffic
 #                    and can exceed p5en's 50 GB/s per-GPU wire.
@@ -222,11 +237,24 @@ else
   echo "===      decode 2.2-5.4x slower than GDAKI. Do not pool with a _gin5 arm. ===" >&2
 fi
 
+# --prefer-overlap-with-compute is a CLI arg, not an env var, so EXTRA_ENV cannot
+# reach it and grep-ing the log for `-e PREFER_OVERLAP` finds nothing. `set -x`
+# does echo the resolved docker command, but that line is 30 wrapped lines long.
+# Stamp the resolved value on its own line so the configuration of a log is
+# recoverable by one grep, like the GIN backend above.
+echo "=== PREFER_OVERLAP=${PREFER_OVERLAP:-0} (--prefer-overlap-with-compute) ==="
+
 # Stamp what code is actually in the image into every log. The image tag is a
 # name someone chose; BUILD_REF is what `git rev-parse HEAD` said at build time.
 # Without this, a rebuilt-but-same-tag image produces numbers you cannot attribute.
 echo "=== IMAGE=${IMAGE}  DeepEP=$(docker run --rm --entrypoint cat "${IMAGE}" \
   /opt/DeepEP/BUILD_REF 2>/dev/null || echo 'BUILD_REF absent -- image predates SHA stamping') ==="
+# A stacked image's BUILD_REF is a LOCAL merge commit -- it resolves to nothing
+# upstream, so on its own it is an unciteable number. The two parents do determine
+# the tree (the merge is conflict-free), so print them too when they exist.
+parents=$(docker run --rm --entrypoint cat "${IMAGE}" \
+  /opt/DeepEP/BUILD_REF_PARENTS 2>/dev/null || true)
+[ -z "$parents" ] || echo "=== DeepEP is a MERGE of: ${parents} ==="
 
 set -x
 # --init: tini as PID 1. Without it, python3 is PID 1 -- it does not reap zombies
@@ -263,7 +291,7 @@ docker run --rm --init \
     --num-processes=${NUM_PROCESSES} --num-tokens=${TOKENS} \
     --hidden=7168 --num-topk=8 --num-experts=256 \
     --num-sms=${NUM_SMS} --allow-hybrid-mode=1 \
-    --prefer-overlap-with-compute=0 ${FIRST_ONLY_ARG} \
+    --prefer-overlap-with-compute=${PREFER_OVERLAP:-0} ${FIRST_ONLY_ARG} \
     ${IGNORE_LOCAL:+--ignore-local-traffic} $*"
 # python3 -u / PYTHONUNBUFFERED: without them stdout is block-buffered into the
 # redirected log, so a run that hangs in NCCL/GIN init shows an EMPTY log.

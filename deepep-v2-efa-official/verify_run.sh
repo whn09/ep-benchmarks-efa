@@ -84,6 +84,29 @@ for f in "$@"; do
         echo "  FAIL name says _type2 but NCCL_GIN_TYPE=5 was set -- mislabelled log"; fails=$((fails + 1)); fi ;;
   esac
 
+  # --- which --prefer-overlap-with-compute actually ran ---------------------
+  # It is a CLI arg, not an env var, so no `-e` line carries it. Read it from the
+  # CLI form rather than from run_test_ep.sh's banner: the banner only exists since
+  # 2026-08-31, the `set -x` trace of the docker command has always had it, and
+  # both spell it the same way. Absent = a log old enough to predate the flag,
+  # which was the =0 default. =1 is a different kernel configuration (double
+  # buffering, warp counts) and on PR #8+#9 it also disables the channel-clamp
+  # removal and the forward-warp pairing, so the two must never pool.
+  ovlp=$(grep -o -- '--prefer-overlap-with-compute=[0-9]*' "$f" | head -1 | cut -d= -f2)
+  case "$b" in
+    *_ovlp0_*|*_ovlp0.*) [ "${ovlp:-0}" = 0 ] || {
+        echo "  FAIL name says _ovlp0 but the run passed =$ovlp -- mislabelled log"
+        fails=$((fails + 1)); } ;;
+    *_ovlp1_*|*_ovlp1.*) [ "${ovlp:-}" = 1 ] || {
+        echo "  FAIL name says _ovlp1 but the run passed =${ovlp:-<absent>} -- mislabelled log"
+        fails=$((fails + 1)); } ;;
+    *) if [ "${ovlp:-0}" != 0 ]; then
+         echo "  FAIL --prefer-overlap-with-compute=$ovlp but the name carries no _ovlp1"
+         echo "       segment -- it would pool with the =0 arm"
+         fails=$((fails + 1))
+       fi ;;
+  esac
+
   # --- things that make a number incomparable rather than wrong ------------
   if grep -q 'EP_BUFFER_DEBUG=' "$f"; then
     echo "  WARN EP_BUFFER_DEBUG was set -- it printf()s from inside dispatch's timed"
