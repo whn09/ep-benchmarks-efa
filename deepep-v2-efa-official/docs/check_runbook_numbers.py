@@ -501,6 +501,14 @@ if HAVE_TOP:
     # rounded cells -- 207.0 + 196.4 would print 403.4 where the run is 403.5.
     GDAKI_B300_55SM_D, GDAKI_B300_55SM_C = 200.445, 160.085
     GDAKI_B300_12SM_D, GDAKI_B300_12SM_C = 207.044, 196.414
+    # Route B's 8192-token SM sweep, b300_pfsm_p1_{12,24,48,64}_rank{0,1}.log -- 16 ranks
+    # pooled over both nodes, unweighted `combine` (the op the throughput table uses).
+    # Its 24 SM cell is what makes the sweep quotable next to the published 8-rank
+    # 131 GB/s / 1788.1 us cell: same arm, 0.3% apart.
+    GDAKI_PF_12SM_D, GDAKI_PF_12SM_C = 1147.562, 2788.438
+    GDAKI_PF_55SM_D = 822.109
+    GDAKI_PF_24SM_C, GDAKI_PF_48SM_C, GDAKI_PF_55SM_C = 1783.000, 1883.500, 1760.688
+    GDAKI_PF_12SM_C_GB, GDAKI_PF_24SM_C_GB = 84.12, 131.62
     KINETO_B300_D, KINETO_B300_C = GDAKI_B300_55SM_D, GDAKI_B300_55SM_C
     _g12 = GDAKI_B300_12SM_D + GDAKI_B300_12SM_C
     _g55 = GDAKI_B300_55SM_D + GDAKI_B300_55SM_C
@@ -569,7 +577,15 @@ if HAVE_TOP:
            P(sp(STACK, 8192, "combine"), _pc8), N(_pc8),
            N(sp(STACK, 8192, "combine")),
            G(gs.so(MAIN, 8192, "combine", DFLT, basis(8192))),
-           G(gs.so(STACK, 8192, "combine", DFLT, basis(8192)))], span=12)
+           G(gs.so(STACK, 8192, "combine", DFLT, basis(8192))),
+           # the matched-12 SM prefill comparison against route B's own SM sweep
+           G(GDAKI_PF_12SM_C_GB), N(GDAKI_PF_12SM_C),
+           G(GDAKI_PF_24SM_C_GB), N(GDAKI_PF_24SM_C),
+           P(vb(STACK, 8192, "combine"), GDAKI_PF_12SM_C),
+           P(GDAKI_PF_24SM_C, GDAKI_PF_12SM_C),
+           N(GDAKI_PF_48SM_C), N(GDAKI_PF_55SM_C), N(GDAKI_PF_55SM_D),
+           N(GDAKI_PF_12SM_D), P(vb(STACK, 8192, "dispatch"), GDAKI_PF_12SM_D)],
+          span=26)
 
     # the two Recommendations cells that now quote a step
     claim("top", r"^\| \*\*MoE inference, decode\*\*",

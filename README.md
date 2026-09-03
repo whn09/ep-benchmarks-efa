@@ -155,16 +155,28 @@ the decode table quotes. **p5en Dispatch is bold twice because it is one measure
 twice**: 81.25 GB/s = 1502.9 µs in the 2026-08 campaign, 81.00 = 1506.0 µs here, and the
 four PRs do not touch p5en prefill dispatch at all.
 
-**The one column this row does not win is B300 Combine, and the reason is the SM count,
-not the PRs.** It runs **12 SM on both machines** where the † row gives b300 24: combine
-is the SM-hungry op, so 2816.0 µs at 12 SM cannot reach 1788.1 µs at 24 even though the
-same arm is **−3.8%** against its own unpatched `54fffef` (2927.4 µs) at matched SM.
+**The one column this row does not win is B300 Combine, and the SM count is the reason —
+measured on the † arm itself, not inferred.** This row runs **12 SM on both machines**
+where the † row gives b300 24, and the † campaign has its own **12 SM** prefill cell
+(`results/b300_20260813/b300_pfsm_p1_12*`, 16 ranks pooled over both nodes; the same
+tuned arm, confirmed by its 24 SM cell reproducing the published one to 0.3% —
+131.62 GB/s / 1783.0 µs vs 131 / 1788.1): **84.12 GB/s / 2788.4 µs of combine**, against
+this row's 83.21 / 2816.0. **At matched SM the two arms are at parity on combine, +1.0% in
+time**, so the whole 131-vs-83.21 column difference is 12 → 24 SM — worth **−36.1%** on
+the † arm's own sweep (2788.4 → 1783.0 µs), which then goes back *up* to 1883.5 µs at 48
+before 1760.7 at 55, i.e. combine's SM curve is not monotone. This row is also **−3.8%**
+against its own unpatched `54fffef` (2927.4 µs) at matched SM. Note what the sweep also
+says about the † row itself: **24 SM is not route B's best prefill point, 55 SM is**
+(822.1 µs dispatch / 1760.7 combine), so a claim of the form "12 SM + the PRs beats route
+B" holds against the config the † row publishes and against route B at 12 SM, not against
+route B at its own optimum.
 Dispatch has the opposite property — **947.8 µs at 12 SM already beats the 978.8 µs the
-† row gets from 24** (−10.3% vs its own main, 1056.2 µs), which is PR #8+#9 and is
-**b300-only**: on p5en the identical arm moves prefill dispatch by **+0.2%** (1503.6 →
+† row gets from 24**, and at matched 12 SM it is **−17.4%** against that campaign's
+1147.6 µs, of which PR #8+#9 is −10.3% (vs this campaign's own main, 1056.2 µs). That win
+is **b300-only**: on p5en the identical arm moves prefill dispatch by **+0.2%** (1503.6 →
 1506.0 µs), and all of p5en's prefill win is combine, **−11.7%** (3613.7 → 3192.4 µs,
-65.38 → 73.44 GB/s). A 24 SM b300 cell on this arm would settle whether the combine
-column moves too; it has not been run.
+65.38 → 73.44 GB/s). A 24 SM b300 cell on this arm is still unrun; what it would settle is
+now only whether the PRs' combine win survives at 24 SM.
 
 **Where 4096 and 8192 each come from** — because it decides what this table can and
 cannot conclude. **4096 is nobody's chosen shape**: it is both benches' argparse
