@@ -1,0 +1,178 @@
+EPRUNS=/Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/p5en_stack_20260831/logs
+
+CONFIG -- read out of the logs, not assumed
+
+  arm       knob     BUILD_REF                                  #SM    #QPs     merge parents
+  main      qpdefault 54fffeff810723f574c574b1790dff189f3c6ffb   12     11/11    
+  PR #1+#2  qpdefault bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11    
+  PR #1+#2  subparts1 bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11    
+  PR #8+#9  qpdefault 3c737dcf0da5889ba7efd26e05b4808307cc38af   12     13/13    
+  stack     qpdefault a35285f0af98856625e542df24bd17a985bc05d9   12     13/13    3c737dcf0da5889ba7efd26e05b4808307cc38af+bfbdd15ff448783f877cb2210cb3246c8452b05e
+  stack     subparts1 a35285f0af98856625e542df24bd17a985bc05d9   12     13/13    3c737dcf0da5889ba7efd26e05b4808307cc38af+bfbdd15ff448783f877cb2210cb3246c8452b05e
+
+  #QPs 13/13 on both #8+#9 and the stack, 11/11 on main and #1+#2: PR #9's
+  kDefaultGinContextCnt bump survived the merge, which is the cheapest
+  available proof that the stack is not silently one arm.
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0
+  d is vs main at its default. `subparts1` rows exist only on the arms that
+  carry PR #1's env forwarding.
+
+  op                 arm       knob               us  d vs main SO GB/s      per-rep us
+  -------------------------------------------------------------------------------------
+  dispatch           main      qpdefault      1503.6            81-81        1503.6
+                     PR #8+#9  qpdefault      1504.1      +0.0% 81-81        1504.1
+                     stack     qpdefault      1506.0      +0.2% 81-81        1506.0
+                     stack     subparts1      1594.5      +6.0% 76-77        1594.5
+
+  expanded dispatch  main      qpdefault      1508.4            81-81        1508.4
+                     PR #8+#9  qpdefault      1508.0      -0.0% 81-81        1508.0
+                     stack     qpdefault      1508.9      +0.0% 81-81        1508.9
+                     stack     subparts1      1598.0      +5.9% 76-77        1598.0
+
+  cached dispatch    main      qpdefault      1595.0            76-77        1595.0
+                     PR #8+#9  qpdefault      1505.9      -5.6% 81-81        1505.9
+                     stack     qpdefault      1506.4      -5.6% 81-81        1506.4
+                     stack     subparts1      1591.7      -0.2% 77-77        1591.7
+
+  combine            main      qpdefault      3613.7            59-73        3613.7
+                     PR #8+#9  qpdefault      3190.3     -11.7% 71-76        3190.3
+                     stack     qpdefault      3192.4     -11.7% 72-76        3192.4
+                     stack     subparts1      3167.6     -12.3% 71-78        3167.6
+
+  reduced combine    main      qpdefault      4297.1            52-59        4297.1
+                     PR #8+#9  qpdefault      3691.9     -14.1% 61-65        3691.9
+                     stack     qpdefault      3692.8     -14.1% 60-66        3692.8
+                     stack     subparts1      3695.3     -14.0% 60-66        3695.3
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0
+  d is vs main at its default. `subparts1` rows exist only on the arms that
+  carry PR #1's env forwarding.
+
+  op                 arm       knob               us  d vs main SO GB/s      per-rep us
+  -------------------------------------------------------------------------------------
+  dispatch           main      qpdefault       170.3            10-11        170.0 / 170.6
+                     PR #1+#2  qpdefault       113.8     -33.2% 15-16        114.1 / 113.5
+                     PR #1+#2  subparts1       107.1     -37.1% 16-18        106.9 / 107.3
+                     PR #8+#9  qpdefault       123.7     -27.4% 14-15        122.3 / 125.0
+                     stack     qpdefault       113.9     -33.1% 15-17        113.9
+                     stack     subparts1       105.4     -38.1% 16-18        105.4
+
+  expanded dispatch  main      qpdefault       169.9            10-11        169.5 / 170.4
+                     PR #1+#2  qpdefault       113.1     -33.4% 15-17        112.7 / 113.5
+                     PR #1+#2  subparts1       106.9     -37.1% 16-18        106.8 / 107.0
+                     PR #8+#9  qpdefault       126.7     -25.5% 13-15        130.8 / 122.5
+                     stack     qpdefault       113.9     -33.0% 15-17        113.9
+                     stack     subparts1       106.0     -37.7% 16-18        106.0
+
+  cached dispatch    main      qpdefault       165.9            10-11        165.7 / 166.1
+                     PR #1+#2  qpdefault       108.6     -34.5% 16-17        108.5 / 108.8
+                     PR #1+#2  subparts1       104.3     -37.2% 16-18        104.3 / 104.2
+                     PR #8+#9  qpdefault       119.5     -27.9% 14-16        119.6 / 119.5
+                     stack     qpdefault       110.5     -33.4% 15-17        110.5
+                     stack     subparts1       102.3     -38.4% 16-19        102.3
+
+  combine            main      qpdefault       163.9            20-22        163.8 / 164.1
+                     PR #1+#2  qpdefault       163.7      -0.1% 20-22        163.6 / 163.9
+                     PR #1+#2  subparts1       163.6      -0.2% 20-22        163.7 / 163.5
+                     PR #8+#9  qpdefault       144.5     -11.9% 23-25        144.6 / 144.3
+                     stack     qpdefault       144.2     -12.0% 23-25        144.2
+                     stack     subparts1       143.5     -12.4% 23-25        143.5
+
+  reduced combine    main      qpdefault       180.5            18-20        180.4 / 180.7
+                     PR #1+#2  qpdefault       180.8      +0.1% 18-20        180.6 / 181.0
+                     PR #1+#2  subparts1       180.4      -0.1% 18-20        180.6 / 180.2
+                     PR #8+#9  qpdefault       150.6     -16.6% 22-24        150.7 / 150.5
+                     stack     qpdefault       150.6     -16.6% 22-24        150.6
+                     stack     subparts1       150.8     -16.5% 22-24        150.8
+
+ADDITIVITY -- PREFILL (8192 tok)
+
+  expected = main + (#1+#2 - main) + (#8+#9 - main)  [the two savings add]
+  residual = measured stack - expected. > 0 means they overlap (the stack
+  gets less than the sum); < 0 means they compound.
+
+  op                 knob            main     #1+#2     #8+#9  expected     stack residual
+  dispatch           qpdefault  -- not computable: #1+#2 not measured in this campaign
+  dispatch           subparts1  -- not computable: #1+#2 not measured in this campaign
+
+  expanded dispatch  qpdefault  -- not computable: #1+#2 not measured in this campaign
+  expanded dispatch  subparts1  -- not computable: #1+#2 not measured in this campaign
+
+  cached dispatch    qpdefault  -- not computable: #1+#2 not measured in this campaign
+  cached dispatch    subparts1  -- not computable: #1+#2 not measured in this campaign
+
+  combine            qpdefault  -- not computable: #1+#2 not measured in this campaign
+  combine            subparts1  -- not computable: #1+#2 not measured in this campaign
+
+  reduced combine    qpdefault  -- not computable: #1+#2 not measured in this campaign
+  reduced combine    subparts1  -- not computable: #1+#2 not measured in this campaign
+
+  layer total        qpdefault  -- not computable: #1+#2 not measured in this campaign
+  layer total        subparts1  -- not computable: #1+#2 not measured in this campaign
+
+ADDITIVITY -- DECODE (128 tok)
+
+  expected = main + (#1+#2 - main) + (#8+#9 - main)  [the two savings add]
+  residual = measured stack - expected. > 0 means they overlap (the stack
+  gets less than the sum); < 0 means they compound.
+
+  op                 knob            main     #1+#2     #8+#9  expected     stack residual
+  dispatch           qpdefault      170.0     114.1     122.3      66.4     113.9     47.5  (85% of the larger single win, reps 1)
+  dispatch           subparts1      170.0     106.9     122.3      59.2     105.4     46.2  (73% of the larger single win, reps 1)
+
+  expanded dispatch  qpdefault      169.5     112.7     130.8      74.0     113.9     39.8  (70% of the larger single win, reps 1)
+  expanded dispatch  subparts1      169.5     106.8     130.8      68.1     106.0     37.8  (60% of the larger single win, reps 1)
+
+  cached dispatch    qpdefault      165.7     108.5     119.6      62.4     110.5     48.1  (84% of the larger single win, reps 1)
+  cached dispatch    subparts1      165.7     104.3     119.6      58.2     102.3     44.1  (72% of the larger single win, reps 1)
+
+  combine            qpdefault      163.8     163.6     144.6     144.3     144.2     -0.1  (-0% of the larger single win, reps 1)
+  combine            subparts1      163.8     163.7     144.6     144.5     143.5     -0.9  (-5% of the larger single win, reps 1)
+
+  reduced combine    qpdefault      180.4     180.6     150.7     150.9     150.6     -0.3  (-1% of the larger single win, reps 1)
+  reduced combine    subparts1      180.4     180.6     150.7     150.9     150.8     -0.1  (-0% of the larger single win, reps 1)
+
+  layer total        qpdefault      350.4     294.7     273.1     217.3     264.5     47.2  (61% of the larger single win, reps 1)
+  layer total        subparts1      350.4     287.5     273.1     210.1     256.2     46.0  (60% of the larger single win, reps 1)
+
+BEST OPERATING POINT -- PREFILL (8192 tok), dispatch + reduced combine
+  each arm at whichever knob is faster FOR IT, since that is what would be
+  deployed; the knob column says which one won. `reps` is per row: an arm
+  with more reps on disk is NOT averaged over them here unless main has
+  them too, so every `d vs main` is a same-rep difference.
+
+  arm       knob         dispatch    redComb      layer d vs main  reps
+  main      qpdefault      1503.6     4297.1     5800.7            1
+  PR #8+#9  qpdefault      1504.1     3691.9     5195.9    -10.4%  1
+  stack     qpdefault      1506.0     3692.8     5198.8    -10.4%  1
+
+BEST OPERATING POINT -- DECODE (128 tok), dispatch + reduced combine
+  each arm at whichever knob is faster FOR IT, since that is what would be
+  deployed; the knob column says which one won. `reps` is per row: an arm
+  with more reps on disk is NOT averaged over them here unless main has
+  them too, so every `d vs main` is a same-rep difference.
+
+  arm       knob         dispatch    redComb      layer d vs main  reps
+  main      qpdefault       170.3      180.5      350.8            1,2
+  PR #1+#2  subparts1       107.1      180.4      287.5    -18.1%  1,2
+  PR #8+#9  qpdefault       123.7      150.6      274.3    -21.8%  1,2
+  stack     subparts1       105.4      150.8      256.2    -26.9%  1
+
+AUDIT -- reps on disk and rank completeness (n must equal 16)
+
+   8192tok main      qpdefault  rep1:16/16
+   8192tok PR #1+#2  qpdefault  -- not run
+   8192tok PR #1+#2  subparts1  -- not run
+   8192tok PR #8+#9  qpdefault  rep1:16/16
+   8192tok stack     qpdefault  rep1:16/16
+   8192tok stack     subparts1  rep1:16/16
+    128tok main      qpdefault  rep1:16/16 rep2:16/16
+    128tok PR #1+#2  qpdefault  rep1:16/16 rep2:16/16
+    128tok PR #1+#2  subparts1  rep1:16/16 rep2:16/16
+    128tok PR #8+#9  qpdefault  rep1:16/16 rep2:16/16
+    128tok stack     qpdefault  rep1:16/16
+    128tok stack     subparts1  rep1:16/16
+
+  no rep was excluded as an outlier.
+

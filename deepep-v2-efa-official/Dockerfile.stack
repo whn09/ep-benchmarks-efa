@@ -1,0 +1,76 @@
+# 把两组互不相干的 PR 叠到一个镜像里，用来测**可加性**（additivity）。
+#
+#   REF_A  先 checkout 的那一支（这里是 PR #8+#9 的 head，改的是 combine 侧）
+#   REF_B  merge 上去的那一支（这里是 PR #1+#2 的 head，改的是 dispatch 侧 + JIT env）
+#
+# 为什么是 merge 而不是 push 一个分支再按 sha 建：merge 本身无冲突（两支改的文件除
+# README 之外不重叠），所以 (REF_A, REF_B) 两个 sha 就完整决定了这棵树 —— 不需要往共享
+# 仓库里推一个一次性的分支，别人拿这两个 sha 加一条 `git merge` 就能复现。
+#
+# merge commit 的 sha 依赖 committer 时间，所以这里把三个时间变量钉死。不钉的话两台机器
+# 各自 build 出来的 sha 不同，同一条臂的两个 node 日志会印出两个不同的 DeepEP=<sha>，
+# CONFIG 表会变成两行，而它们其实是同一棵树。
+#
+# 用法见 build_stack_image.sh；不要手动 docker build，两个 build-arg 少一个都会静默拿到
+# 单臂镜像而不是 stack。
+ARG BASE=deepep-v2-efa-official:sm90-3c737dc
+FROM ${BASE}
+
+ARG REF_A
+ARG REF_B
+# 和主 Dockerfile 同样的理由：让 layer cache 跟着两个 ref 指向的 commit 走。
+ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${REF_A} /tmp/stack-ref-a.json
+ADD https://api.github.com/repos/amazon-contributing/DeepEP/commits/${REF_B} /tmp/stack-ref-b.json
+
+# base 镜像里已经装了一份 deep_ep（单臂那支）。必须先卸干净再装：setup.py install 落的是
+# egg，两份 egg 同时在 easy-install.pth 里的时候，import 到哪一份取决于顺序，而不取决于
+# 哪一份是后装的 —— 那会得到一个「看起来是 stack、跑的是单臂」的镜像，日志里没有任何
+# 迹象。卸完顺手 assert 一下 import 不进来了。
+RUN set -eux; \
+    SITE="$(python3 -c 'import deep_ep, os; print(os.path.dirname(os.path.dirname(deep_ep.__file__)))')"; \
+    pip uninstall -y deep-ep deep_ep 2>/dev/null || true; \
+    rm -rf "$SITE"/deep_ep* "$SITE"/deep_ep-*.egg-info "$SITE"/deep_ep-*.egg; \
+    if [ -f "$SITE/easy-install.pth" ]; then grep -v deep_ep "$SITE/easy-install.pth" > /tmp/pth || true; mv /tmp/pth "$SITE/easy-install.pth"; fi; \
+    ! python3 -c 'import deep_ep' 2>/dev/null
+
+# 全量 fetch 两个 sha（不带 --depth）：merge 要 merge-base，浅历史可能根本没有共同祖先。
+ENV GIT_AUTHOR_DATE="2026-08-31T00:00:00 +0000" \
+    GIT_COMMITTER_DATE="2026-08-31T00:00:00 +0000"
+RUN set -eux; \
+    rm -rf /opt/DeepEP; mkdir -p /opt/DeepEP; cd /opt/DeepEP; \
+    git init -q; \
+    git remote add origin https://github.com/amazon-contributing/DeepEP.git; \
+    git fetch -q origin "$REF_A" "$REF_B"; \
+    git checkout -q "$REF_A"; \
+    git -c user.email=bench@local -c user.name=bench merge --no-edit "$REF_B" \
+        -m "measure: stack $REF_B onto $REF_A"; \
+    git rev-parse HEAD > /opt/DeepEP/BUILD_REF; \
+    printf '%s %s\n' "$REF_A" "$REF_B" > /opt/DeepEP/BUILD_REF_PARENTS; \
+    echo "stacked $REF_B onto $REF_A -> $(cat /opt/DeepEP/BUILD_REF)"; \
+    git submodule update -q --init --recursive --depth 1; \
+    NCCL_LIB="$(python3 -c 'import nvidia.nccl, os; print(os.path.join(list(nvidia.nccl.__path__)[0], "lib"))')"; \
+    test -e "$NCCL_LIB/libnccl.so.2"; \
+    LIBRARY_PATH="$NCCL_LIB:${LIBRARY_PATH:-}" python3 setup.py install; \
+    rm -rf build
+
+# 装完当场验：两支的改动都要在**装出来的那份**里，而不只是在 /opt/DeepEP 的源码树里。
+#   - EP_NUM_SUB_PARTS 是 PR #1 往 JIT 转发 env 的那段，编进 _C.so；
+#   - #9 改的 combine 头文件是 JIT 在运行时读的，必须在 installed package 的 include 下。
+# 任一条不成立就让 build 失败，而不是产出一个安静地只带一半补丁的镜像。
+RUN set -eux; \
+    PKG="$(python3 -c 'import deep_ep, os; print(os.path.dirname(deep_ep.__file__))')"; \
+    echo "installed deep_ep at $PKG"; \
+    python3 -c 'import deep_ep, deep_ep._C'; \
+    SO="$(find "$PKG" -maxdepth 1 -name '_C*.so' | head -1)"; test -n "$SO"; \
+    strings "$SO" | grep -q EP_NUM_SUB_PARTS; \
+    grep -rq 'kMinTokensPerPart' "$PKG/include/deep_ep/impls/hybrid_dispatch_unordered.cuh"; \
+    grep -rq 'kNumFwWarpsPerChannel' "$PKG/include/deep_ep/impls/hybrid_combine_unordered.cuh"; \
+    grep -q 'kDefaultGinContextCnt *= *13' "$PKG/include/deep_ep/common/gin_resource_alloc.cuh"; \
+    test -s /opt/DeepEP/BUILD_REF_PARENTS
+# 四条 assert 分别对应四组改动，缺哪一半都 build 失败：
+#   EP_NUM_SUB_PARTS 在 _C.so 里            -> PR #1 的 JIT env 转发（host 侧，编进 so）
+#   kMinTokensPerPart 在 dispatch 头文件里  -> PR #2 的 part clamp（device 侧，JIT 运行时读）
+#   kNumFwWarpsPerChannel 在 combine 头里   -> PR #8+#9 的 forward-warp 配对
+#   kDefaultGinContextCnt = 13              -> PR #9 的 QP bump（日志里会印成 #QPs 13/13）
+# 检查的是 **installed package** 下的 include，而不是 /opt/DeepEP 的源码树：JIT 编的是
+# 前者，源码树对不对不决定跑的是什么。

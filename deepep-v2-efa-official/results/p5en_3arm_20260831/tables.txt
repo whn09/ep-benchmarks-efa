@@ -1,0 +1,414 @@
+EPRUNS=./logs
+
+CONFIG -- what each arm actually ran (read out of the logs, not assumed)
+
+  arm       tag      BUILD_REF                                  #SM      #QPs    
+  main      54fffef  54fffeff810723f574c574b1790dff189f3c6ffb   12       11/11   
+  PR #1+#2  bfbdd15  bfbdd15ff448783f877cb2210cb3246c8452b05e   12       11/11   
+  PR #8+#9  3c737dc  3c737dcf0da5889ba7efd26e05b4808307cc38af   12       13/13   
+
+  #QPs is the GIN context count. PR #9 raises kDefaultGinContextCnt 11 -> 13,
+  so a differing #QPs here is the patch landing, not a misconfiguration.
+  #SM 12 on every arm: PR #9 also removes the num_channels_per_sm <= 4 clamp,
+  which changes CHANNELS at a fixed SM count and does not show up in #SM.
+
+PREFILL -- 2 nodes / 16 ranks, 8192 tok, 12 SM, GIN type 5
+  time is the metric. SO GB/s is min-max across ranks (a different statistic
+  from the us column) and MB/rank is its denominator, so a GB/s that moved can
+  be attributed. --ignore-local-traffic OFF, so SO is not a wire rate.
+
+  op                 arm               us d vs main SO GB/s     MB/rank        per-rep us
+  ---------------------------------------------------------------------------------------
+  dispatch           main          1499.8           81-82       395.9-402.4    1499.5 / 1501.4 / 1498.4
+                     PR #1+#2      1498.7     -0.1% 81-82       395.9-402.4    1500.1 / 1495.5 / 1500.5
+                     PR #8+#9      1498.4     -0.1% 81-82       395.9-402.4    1497.1 / 1499.5 / 1498.5
+
+  expanded dispatch  main          1500.9           81-82       395.9-402.4    1500.7 / 1500.0 / 1502.0
+                     PR #1+#2      1500.5     -0.0% 81-82       395.9-402.4    1501.0 / 1501.5 / 1498.9
+                     PR #8+#9      1502.5     +0.1% 81-82       395.9-402.4    1502.5 / 1503.5 / 1501.5
+
+  cached dispatch    main          1588.8           77-77       395.9-402.4    1589.0 / 1588.4 / 1589.0
+                     PR #1+#2      1587.4     -0.1% 77-77       395.9-402.4    1587.5 / 1587.0 / 1587.6
+                     PR #8+#9      1496.2     -5.8% 81-82       395.9-402.4    1496.5 / 1498.0 / 1494.1
+
+  combine            main          3587.8           60-73       759.7-772.1    3594.1 / 3594.2 / 3575.2
+                     PR #1+#2      3575.8     -0.3% 60-73       759.7-772.1    3568.0 / 3562.3 / 3596.9
+                     PR #8+#9      3172.5    -11.6% 70-77       759.7-772.1    3170.8 / 3178.8 / 3168.1
+
+  reduced combine    main          4238.0           53-60       759.7-772.1    4249.5 / 4231.8 / 4232.7
+                     PR #1+#2      4239.6     +0.0% 53-60       759.7-772.1    4255.1 / 4231.6 / 4232.1
+                     PR #8+#9      3670.5    -13.4% 61-66       759.7-772.1    3673.4 / 3676.3 / 3661.7
+
+PREFILL -- 4 nodes / 32 ranks, 8192 tok, 12 SM, GIN type 5
+  time is the metric. SO GB/s is min-max across ranks (a different statistic
+  from the us column) and MB/rank is its denominator, so a GB/s that moved can
+  be attributed. --ignore-local-traffic OFF, so SO is not a wire rate.
+
+  op                 arm               us d vs main SO GB/s     MB/rank        per-rep us
+  ---------------------------------------------------------------------------------------
+  dispatch           main          3965.2           55-57       441.4-447.7    3963.4 / 3966.5 / 3965.7
+                     PR #1+#2      3969.2     +0.1% 55-56       441.4-447.7    3970.6 / 3967.5 / 3969.6
+                     PR #8+#9      3961.2     -0.1% 55-57       441.4-447.7    3961.5 / 3964.0 / 3958.1
+
+  expanded dispatch  main          3969.4           55-57       441.4-447.7    3966.2 / 3970.8 / 3971.2
+                     PR #1+#2      3965.2     -0.1% 55-57       441.4-447.7    3968.2 / 3965.4 / 3962.0
+                     PR #8+#9      3962.5     -0.2% 55-57       441.4-447.7    3964.9 / 3959.5 / 3963.2
+
+  cached dispatch    main          4254.0           52-53       441.4-447.7    4257.3 / 4255.0 / 4249.8
+                     PR #1+#2      4253.5     -0.0% 52-53       441.4-447.7    4250.7 / 4260.0 / 4249.7
+                     PR #8+#9      3946.2     -7.2% 56-57       441.4-447.7    3948.0 / 3946.9 / 3943.6
+
+  combine            main          7872.1           49-57       847.0-859.0    7891.8 / 7854.8 / 7869.6
+                     PR #1+#2      7868.3     -0.0% 49-57       847.0-859.0    7817.3 / 7902.1 / 7885.7
+                     PR #8+#9      7761.8     -1.4% 50-57       847.0-859.0    7777.6 / 7763.8 / 7744.0
+
+  reduced combine    main          7947.3           46-57       847.0-859.0    7924.7 / 7965.4 / 7951.9
+                     PR #1+#2      7942.3     -0.1% 46-58       847.0-859.0    7960.7 / 7935.7 / 7930.4
+                     PR #8+#9      7773.2     -2.2% 50-57       847.0-859.0    7772.6 / 7780.2 / 7767.0
+
+DECODE -- 2 nodes / 16 ranks, 128 tok, 12 SM, GIN type 5
+  time is the metric. SO GB/s is min-max across ranks (a different statistic
+  from the us column) and MB/rank is its denominator, so a GB/s that moved can
+  be attributed. --ignore-local-traffic OFF, so SO is not a wire rate.
+
+  op                 arm               us d vs main SO GB/s     MB/rank        per-rep us
+  ---------------------------------------------------------------------------------------
+  dispatch           main           169.6           10-11       5.6-6.3        168.7 / 169.8 / 170.5
+                     PR #1+#2       113.1    -33.3% 15-17       5.6-6.3        113.0 / 113.3 / 113.0
+                     PR #8+#9       123.5    -27.2% 14-15       5.6-6.3        122.4 / 125.1 / 123.1
+
+  expanded dispatch  main           169.6           10-11       5.6-6.3        168.6 / 169.8 / 170.4
+                     PR #1+#2       113.2    -33.2% 15-17       5.6-6.3        112.8 / 113.5 / 113.4
+                     PR #8+#9       122.7    -27.7% 14-16       5.6-6.3        122.1 / 122.7 / 123.1
+
+  cached dispatch    main           166.2           10-12       5.6-6.3        165.1 / 166.0 / 167.6
+                     PR #1+#2       107.1    -35.6% 16-18       5.6-6.3        106.4 / 107.6 / 107.1
+                     PR #8+#9       120.2    -27.7% 14-16       5.6-6.3        119.2 / 119.7 / 121.6
+
+  combine            main           162.5           20-22       10.8-12.1      162.5 / 162.4 / 162.5
+                     PR #1+#2       162.5     +0.0% 20-22       10.8-12.1      162.2 / 162.7 / 162.7
+                     PR #8+#9       143.6    -11.6% 23-25       10.8-12.1      143.9 / 143.5 / 143.5
+
+  reduced combine    main           179.2           18-20       10.8-12.1      179.3 / 179.1 / 179.1
+                     PR #1+#2       178.9     -0.2% 18-20       10.8-12.1      179.0 / 179.0 / 178.7
+                     PR #8+#9       149.5    -16.6% 22-24       10.8-12.1      149.3 / 149.6 / 149.6
+
+DECODE -- 4 nodes / 32 ranks, 128 tok, 12 SM, GIN type 5
+  time is the metric. SO GB/s is min-max across ranks (a different statistic
+  from the us column) and MB/rank is its denominator, so a GB/s that moved can
+  be attributed. --ignore-local-traffic OFF, so SO is not a wire rate.
+
+  op                 arm               us d vs main SO GB/s     MB/rank        per-rep us
+  ---------------------------------------------------------------------------------------
+  dispatch           main           184.0           14-19       5.8-6.4        183.9 / 183.8 / 184.3
+                     PR #1+#2       170.3     -7.5% 15-21       5.8-6.4        170.2 / 170.5 / 170.0
+                     PR #8+#9       171.0     -7.1% 15-21       5.8-6.4        170.6 / 171.1 / 171.1
+
+  expanded dispatch  main           183.9           14-19       5.8-6.4        183.7 / 183.9 / 184.0
+                     PR #1+#2       170.2     -7.4% 15-21       5.8-6.4        170.2 / 169.7 / 170.6
+                     PR #8+#9       171.2     -6.9% 15-21       5.8-6.4        171.2 / 170.9 / 171.3
+
+  cached dispatch    main           178.9           14-20       5.8-6.4        178.7 / 178.3 / 179.8
+                     PR #1+#2       172.2     -3.8% 15-21       5.8-6.4        171.9 / 172.1 / 172.5
+                     PR #8+#9       167.6     -6.4% 15-21       5.8-6.4        167.8 / 167.0 / 167.9
+
+  combine            main           244.8           19-29       11.1-12.3      245.0 / 244.6 / 244.9
+                     PR #1+#2       244.6     -0.1% 20-29       11.1-12.3      244.6 / 244.8 / 244.3
+                     PR #8+#9       234.6     -4.2% 21-30       11.1-12.3      234.5 / 234.5 / 234.9
+
+  reduced combine    main           253.6           19-28       11.1-12.3      253.5 / 254.2 / 253.1
+                     PR #1+#2       253.3     -0.1% 19-28       11.1-12.3      253.3 / 253.5 / 253.2
+                     PR #8+#9       237.2     -6.5% 20-29       11.1-12.3      237.1 / 237.4 / 237.1
+
+LAYER TOTAL -- dispatch + reduced combine, 2 nodes, 8192 tok
+  the pair a MoE layer actually issues, so an arm that moves cost from one
+  op to the other shows up here and nowhere else.
+
+  arm         dispatch    redComb      total d vs main
+  main          1499.8     4238.0     5737.8          
+  PR #1+#2      1498.7     4239.6     5738.3     +0.0%
+  PR #8+#9      1498.4     3670.5     5168.8     -9.9%
+
+LAYER TOTAL -- dispatch + reduced combine, 4 nodes, 8192 tok
+  the pair a MoE layer actually issues, so an arm that moves cost from one
+  op to the other shows up here and nowhere else.
+
+  arm         dispatch    redComb      total d vs main
+  main          3965.2     7947.3    11912.5          
+  PR #1+#2      3969.2     7942.3    11911.5     -0.0%
+  PR #8+#9      3961.2     7773.2    11734.5     -1.5%
+
+LAYER TOTAL -- dispatch + reduced combine, 2 nodes, 128 tok
+  the pair a MoE layer actually issues, so an arm that moves cost from one
+  op to the other shows up here and nowhere else.
+
+  arm         dispatch    redComb      total d vs main
+  main           169.6      179.2      348.8          
+  PR #1+#2       113.1      178.9      292.0    -16.3%
+  PR #8+#9       123.5      149.5      273.0    -21.7%
+
+LAYER TOTAL -- dispatch + reduced combine, 4 nodes, 128 tok
+  the pair a MoE layer actually issues, so an arm that moves cost from one
+  op to the other shows up here and nowhere else.
+
+  arm         dispatch    redComb      total d vs main
+  main           184.0      253.6      437.6          
+  PR #1+#2       170.3      253.3      423.6     -3.2%
+  PR #8+#9       171.0      237.2      408.2     -6.7%
+
+EP_NUM_SUB_PARTS=1 -- 2 nodes / 16 ranks, 128 tok, 12 SM, GIN type 5
+  the knob only exists as a lever on #1+#2: PR #1 is the forwarding, and
+  `grep EP_NUM_SUB_PARTS csrc/jit/compiler.hpp` matches ONLY in bfbdd15.
+  main and #8+#9 rows are therefore an inertness control -- they must land
+  on their own default, and a delta there would mean the environment moved,
+  not the knob.
+
+  op                 arm          default  subparts1         d  per-rep us (subparts1)
+  ------------------------------------------------------------------------------------
+  dispatch           main           169.6      169.8     +0.1%  169.1 / 170.4 / 169.7
+                     PR #1+#2       113.1      106.1     -6.2%  105.9 / 106.3 / 106.0
+                     PR #8+#9       123.5      122.9     -0.5%  122.8 / 123.4 / 122.4  !! rep3 EXCLUDED 495.5 (+303% off median)
+
+  expanded dispatch  main           169.6      169.5     -0.0%  168.6 / 169.9 / 170.0
+                     PR #1+#2       113.2      105.7     -6.7%  105.6 / 105.9 / 105.7
+                     PR #8+#9       122.7      122.5     -0.1%  121.9 / 123.1 / 122.4  !! rep3 EXCLUDED 642.8 (+424% off median)
+
+  cached dispatch    main           166.2      165.5     -0.4%  165.0 / 165.6 / 165.8
+                     PR #1+#2       107.1      103.2     -3.6%  102.9 / 103.4 / 103.3
+                     PR #8+#9       120.2      119.3     -0.7%  118.8 / 119.3 / 119.9  !! rep3 EXCLUDED 435.7 (+264% off median)
+
+  combine            main           162.5      162.7     +0.1%  162.5 / 162.5 / 163.0
+                     PR #1+#2       162.5      162.3     -0.2%  162.2 / 162.2 / 162.4
+                     PR #8+#9       143.6      144.0     +0.2%  143.9 / 144.1 / 143.8  !! rep3 EXCLUDED 445.3 (+209% off median)
+
+  reduced combine    main           179.2      179.0     -0.1%  178.8 / 178.9 / 179.2
+                     PR #1+#2       178.9      178.7     -0.1%  178.9 / 178.6 / 178.7
+                     PR #8+#9       149.5      149.6     +0.1%  149.8 / 149.5 / 149.6  !! rep3 EXCLUDED 406.7 (+172% off median)
+
+EP_NUM_SUB_PARTS=1 -- 4 nodes / 32 ranks, 128 tok, 12 SM, GIN type 5
+  the knob only exists as a lever on #1+#2: PR #1 is the forwarding, and
+  `grep EP_NUM_SUB_PARTS csrc/jit/compiler.hpp` matches ONLY in bfbdd15.
+  main and #8+#9 rows are therefore an inertness control -- they must land
+  on their own default, and a delta there would mean the environment moved,
+  not the knob.
+
+  op                 arm          default  subparts1         d  per-rep us (subparts1)
+  ------------------------------------------------------------------------------------
+  dispatch           PR #1+#2       170.3      156.4     -8.1%  157.0 / 156.6 / 155.6
+
+  expanded dispatch  PR #1+#2       170.2      155.4     -8.7%  155.5 / 155.6 / 155.1
+
+  cached dispatch    PR #1+#2       172.2      155.1     -9.9%  155.1 / 154.9 / 155.3
+
+  combine            PR #1+#2       244.6      244.6     +0.0%  244.9 / 244.2 / 244.7
+
+  reduced combine    PR #1+#2       253.3      253.3     -0.0%  253.5 / 253.2 / 253.2
+
+EP_NUM_SUB_PARTS=1 -- 2 nodes / 16 ranks, 8192 tok, 12 SM, GIN type 5
+  the knob only exists as a lever on #1+#2: PR #1 is the forwarding, and
+  `grep EP_NUM_SUB_PARTS csrc/jit/compiler.hpp` matches ONLY in bfbdd15.
+  main and #8+#9 rows are therefore an inertness control -- they must land
+  on their own default, and a delta there would mean the environment moved,
+  not the knob.
+
+  op                 arm          default  subparts1         d  per-rep us (subparts1)
+  ------------------------------------------------------------------------------------
+  dispatch           PR #1+#2      1498.7     1565.0     +4.4%  1565.0 / 1566.5 / 1563.5
+
+  expanded dispatch  PR #1+#2      1500.5     1563.2     +4.2%  1565.1 / 1562.5 / 1562.0
+
+  cached dispatch    PR #1+#2      1587.4     1636.6     +3.1%  1637.7 / 1635.0 / 1637.0
+
+  combine            PR #1+#2      3575.8     3515.7     -1.7%  3511.7 / 3520.8 / 3514.5
+
+  reduced combine    PR #1+#2      4239.6     4175.9     -1.5%  4171.5 / 4189.0 / 4167.2
+
+EP_NUM_SUB_PARTS=1 -- 4 nodes / 32 ranks, 8192 tok, 12 SM, GIN type 5
+  the knob only exists as a lever on #1+#2: PR #1 is the forwarding, and
+  `grep EP_NUM_SUB_PARTS csrc/jit/compiler.hpp` matches ONLY in bfbdd15.
+  main and #8+#9 rows are therefore an inertness control -- they must land
+  on their own default, and a delta there would mean the environment moved,
+  not the knob.
+
+  op                 arm          default  subparts1         d  per-rep us (subparts1)
+  ------------------------------------------------------------------------------------
+  dispatch           PR #1+#2      3969.2     3974.8     +0.1%  3974.0 / 3976.8 / 3973.5
+
+  expanded dispatch  PR #1+#2      3965.2     3973.3     +0.2%  3979.0 / 3966.2 / 3974.8
+
+  cached dispatch    PR #1+#2      4253.5     4259.1     +0.1%  4261.5 / 4258.6 / 4257.4
+
+  combine            PR #1+#2      7868.3     7554.4     -4.0%  7556.2 / 7536.8 / 7570.1
+
+  reduced combine    PR #1+#2      7942.3     7695.1     -3.1%  7674.8 / 7685.8 / 7724.6
+
+BEST CONFIGURATION -- 2 nodes, 128 tok
+  arm x knob, dispatch + reduced combine (the pair a MoE layer issues).
+  both d columns are vs main-at-default, the configuration being replaced.
+
+  arm       knob          dispatch    d disp    redComb      total   d total
+  main      default          169.6                179.2      348.8          
+  main      subparts1        169.8     +0.1%      179.0      348.7     -0.0%
+  PR #1+#2  default          113.1    -33.3%      178.9      292.0    -16.3%
+  PR #1+#2  subparts1        106.1    -37.5%      178.7      284.8    -18.4%
+  PR #8+#9  default          123.5    -27.2%      149.5      273.0    -21.7%
+  PR #8+#9  subparts1        122.9    -27.6%      149.6      272.5    -21.9%
+
+BEST CONFIGURATION -- 4 nodes, 128 tok
+  arm x knob, dispatch + reduced combine (the pair a MoE layer issues).
+  both d columns are vs main-at-default, the configuration being replaced.
+
+  arm       knob          dispatch    d disp    redComb      total   d total
+  main      default          184.0                253.6      437.6          
+  PR #1+#2  default          170.3     -7.5%      253.3      423.6     -3.2%
+  PR #1+#2  subparts1        156.4    -15.0%      253.3      409.7     -6.4%
+  PR #8+#9  default          171.0     -7.1%      237.2      408.2     -6.7%
+
+BEST CONFIGURATION -- 2 nodes, 8192 tok
+  arm x knob, dispatch + reduced combine (the pair a MoE layer issues).
+  both d columns are vs main-at-default, the configuration being replaced.
+
+  arm       knob          dispatch    d disp    redComb      total   d total
+  main      default         1499.8               4238.0     5737.8          
+  PR #1+#2  default         1498.7     -0.1%     4239.6     5738.3     +0.0%
+  PR #1+#2  subparts1       1565.0     +4.3%     4175.9     5740.9     +0.1%
+  PR #8+#9  default         1498.4     -0.1%     3670.5     5168.8     -9.9%
+
+BEST CONFIGURATION -- 4 nodes, 8192 tok
+  arm x knob, dispatch + reduced combine (the pair a MoE layer issues).
+  both d columns are vs main-at-default, the configuration being replaced.
+
+  arm       knob          dispatch    d disp    redComb      total   d total
+  main      default         3965.2               7947.3    11912.5          
+  PR #1+#2  default         3969.2     +0.1%     7942.3    11911.5     -0.0%
+  PR #1+#2  subparts1       3974.8     +0.2%     7695.1    11669.8     -2.0%
+  PR #8+#9  default         3961.2     -0.1%     7773.2    11734.5     -1.5%
+
+SCALING -- 2N -> 4N, same arm, same op. Two axes, printed together:
+  the time ratio (how much slower the bigger job is) and the per-rank byte
+  growth that has to pay for it. A time ratio alone cannot tell a stack that
+  scales badly from one that is simply moving more data.
+
+  prefill (8192 tok):
+    op                 arm            2N us      4N us    4N/2N  2N MB/rank  4N MB/rank  4N/2N B
+    dispatch           main          1499.8     3965.2    2.64x       399.8       444.9    1.11x
+                       PR #1+#2      1498.7     3969.2    2.65x       399.8       444.9    1.11x
+                       PR #8+#9      1498.4     3961.2    2.64x       399.8       444.9    1.11x
+
+    reduced combine    main          4238.0     7947.3    1.88x       767.1       853.7    1.11x
+                       PR #1+#2      4239.6     7942.3    1.87x       767.1       853.7    1.11x
+                       PR #8+#9      3670.5     7773.2    2.12x       767.1       853.7    1.11x
+
+    the byte columns are num_scaleup_bytes (the log's `bytes` field), so
+    they are the SU denominator, not cross-node traffic. Cross-node bytes
+    have to be recovered as SO * time and are not printed here.
+
+  decode (128 tok):
+    op                 arm            2N us      4N us    4N/2N  2N MB/rank  4N MB/rank  4N/2N B
+    dispatch           main           169.6      184.0    1.08x         5.9         6.1    1.04x
+                       PR #1+#2       113.1      170.3    1.51x         5.9         6.1    1.04x
+                       PR #8+#9       123.5      171.0    1.38x         5.9         6.1    1.04x
+
+    reduced combine    main           179.2      253.6    1.42x        11.3        11.7    1.04x
+                       PR #1+#2       178.9      253.3    1.42x        11.3        11.7    1.04x
+                       PR #8+#9       149.5      237.2    1.59x        11.3        11.7    1.04x
+
+    the byte columns are num_scaleup_bytes (the log's `bytes` field), so
+    they are the SU denominator, not cross-node traffic. Cross-node bytes
+    have to be recovered as SO * time and are not printed here.
+
+NODE LAYERING -- per-node mean us, 2 nodes, 8192 tok
+  combine splits by machine and the slow machine flips between runs. If the
+  spread below is large, a table built from the leader's log alone is wrong
+  by that much -- which is why every table above pools all 16 ranks.
+
+  dispatch:
+    arm       rep    per-node mean us             max-min
+    main      rep1   n1 1497 n2 1502              0.3%
+    main      rep2   n1 1499 n2 1504              0.3%
+    main      rep3   n1 1495 n2 1502              0.5%
+    PR #1+#2  rep1   n1 1500 n2 1500              0.0%
+    PR #1+#2  rep2   n1 1495 n2 1496              0.1%
+    PR #1+#2  rep3   n1 1498 n2 1503              0.3%
+    PR #8+#9  rep1   n1 1496 n2 1498              0.2%
+    PR #8+#9  rep2   n1 1498 n2 1501              0.2%
+    PR #8+#9  rep3   n1 1498 n2 1499              0.1%
+
+  reduced combine:
+    arm       rep    per-node mean us             max-min
+    main      rep1   n1 4434 n2 4066              9.1%
+    main      rep2   n1 4053 n2 4410              8.8%
+    main      rep3   n1 4053 n2 4412              8.9%
+    PR #1+#2  rep1   n1 4444 n2 4066              9.3%
+    PR #1+#2  rep2   n1 4072 n2 4391              7.8%
+    PR #1+#2  rep3   n1 4054 n2 4411              8.8%
+    PR #8+#9  rep1   n1 3608 n2 3738              3.6%
+    PR #8+#9  rep2   n1 3608 n2 3744              3.8%
+    PR #8+#9  rep3   n1 3695 n2 3628              1.8%
+
+NODE LAYERING -- per-node mean us, 4 nodes, 128 tok
+  combine splits by machine and the slow machine flips between runs. If the
+  spread below is large, a table built from the leader's log alone is wrong
+  by that much -- which is why every table above pools all 32 ranks.
+
+  dispatch:
+    arm       rep    per-node mean us             max-min
+    main      rep1   n1 182 n2 186 n3 183 n4 185  1.9%
+    main      rep2   n1 182 n2 185 n3 185 n4 184  1.8%
+    main      rep3   n1 184 n2 184 n3 185 n4 184  0.4%
+    PR #1+#2  rep1   n1 170 n2 169 n3 173 n4 170  2.1%
+    PR #1+#2  rep2   n1 171 n2 168 n3 173 n4 170  2.6%
+    PR #1+#2  rep3   n1 168 n2 170 n3 171 n4 170  1.7%
+    PR #8+#9  rep1   n1 170 n2 170 n3 173 n4 171  1.8%
+    PR #8+#9  rep2   n1 170 n2 171 n3 173 n4 171  1.8%
+    PR #8+#9  rep3   n1 171 n2 171 n3 172 n4 170  1.3%
+
+  reduced combine:
+    arm       rep    per-node mean us             max-min
+    main      rep1   n1 242 n2 247 n3 259 n4 266  10.2%
+    main      rep2   n1 242 n2 248 n3 258 n4 268  10.6%
+    main      rep3   n1 243 n2 246 n3 259 n4 265  9.2%
+    PR #1+#2  rep1   n1 242 n2 246 n3 258 n4 266  9.9%
+    PR #1+#2  rep2   n1 242 n2 247 n3 260 n4 265  9.9%
+    PR #1+#2  rep3   n1 242 n2 248 n3 257 n4 267  10.1%
+    PR #8+#9  rep1   n1 226 n2 229 n3 243 n4 250  10.8%
+    PR #8+#9  rep2   n1 225 n2 229 n3 245 n4 251  11.2%
+    PR #8+#9  rep3   n1 225 n2 230 n3 241 n4 251  11.5%
+
+AUDIT -- reps found on disk and rank completeness per cell
+  n must equal the world size. A short n is glued stdout lines, i.e. lost
+  data, and it invalidates that rep's mean rather than widening it.
+
+  qpdefault 2N  8192tok main      rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 2N  8192tok PR #1+#2  rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 2N  8192tok PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 2N   128tok main      rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 2N   128tok PR #1+#2  rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 2N   128tok PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+  qpdefault 4N  8192tok main      rep1:32/32 rep2:32/32 rep3:32/32
+  qpdefault 4N  8192tok PR #1+#2  rep1:32/32 rep2:32/32 rep3:32/32
+  qpdefault 4N  8192tok PR #8+#9  rep1:32/32 rep2:32/32 rep3:32/32
+  qpdefault 4N   128tok main      rep1:32/32 rep2:32/32 rep3:32/32
+  qpdefault 4N   128tok PR #1+#2  rep1:32/32 rep2:32/32 rep3:32/32
+  qpdefault 4N   128tok PR #8+#9  rep1:32/32 rep2:32/32 rep3:32/32
+  subparts1 2N  8192tok main      -- not run
+  subparts1 2N  8192tok PR #1+#2  rep1:16/16 rep2:16/16 rep3:16/16
+  subparts1 2N  8192tok PR #8+#9  -- not run
+  subparts1 2N   128tok main      rep1:16/16 rep2:16/16 rep3:16/16
+  subparts1 2N   128tok PR #1+#2  rep1:16/16 rep2:16/16 rep3:16/16
+  subparts1 2N   128tok PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16 rep4:16/16
+  subparts1 4N  8192tok main      -- not run
+  subparts1 4N  8192tok PR #1+#2  rep1:32/32 rep2:32/32 rep3:32/32
+  subparts1 4N  8192tok PR #8+#9  -- not run
+  subparts1 4N   128tok main      -- not run
+  subparts1 4N   128tok PR #1+#2  rep1:32/32 rep2:32/32 rep3:32/32
+  subparts1 4N   128tok PR #8+#9  -- not run
+
+  reps EXCLUDED as outliers (> 25% off their cell's median) --
+  the raw logs are still under logs/, so this is reversible:
+    pr893c737dc_2N_12sm_128tok_subparts1_nodbg_gin5 rep3 cached dispatch = 435.7 vs median 119.6 (+264%)
+    pr893c737dc_2N_12sm_128tok_subparts1_nodbg_gin5 rep3 combine = 445.3 vs median 144.0 (+209%)
+    pr893c737dc_2N_12sm_128tok_subparts1_nodbg_gin5 rep3 dispatch = 495.5 vs median 123.1 (+303%)
+    pr893c737dc_2N_12sm_128tok_subparts1_nodbg_gin5 rep3 expanded dispatch = 642.8 vs median 122.8 (+424%)
+    pr893c737dc_2N_12sm_128tok_subparts1_nodbg_gin5 rep3 reduced combine = 406.7 vs median 149.7 (+172%)
+

@@ -2,7 +2,8 @@
 
 Builds and runs the **public release** of AWS's DeepEP V2 fork —
 [`amazon-contributing/DeepEP`](https://github.com/amazon-contributing/DeepEP) — on
-2 × `p5en.48xlarge` (8×H200 `sm_90` + 16×200 Gb/s EFA each), bare EC2 with Docker.
+2 × `p5en.48xlarge` (8×H200 `sm_90` + 16×200 Gb/s EFA each) and 2 × `p6-b300.48xlarge`
+(8×B300 `sm_103` + 16×400 Gb/s EFA each), bare EC2 with Docker.
 
 **Everything here comes from published packages.** No source-built NCCL, no
 source-built aws-ofi-nccl, no hand-patched kernel module, no `LD_PRELOAD`.
@@ -556,19 +557,66 @@ reaches only the AOT `_C.so`. Implementing that TODO is the upstream fix worth a
 auto-detection on b300 is not broken but *low*: `get_rdma_gbs` returns **one** device's
 rate and a b300 GPU has two EFA NICs, so it sees 50 of the real 100 GB/s.
 
-Spot check after the fixes (2 nodes, 16 ranks, `--num-tokens 8192`): dispatch ≈ **1025 µs**
-at 12 SM, combine ≈ **1800 µs** at 24 SM. That is a single reading at two different SM
-counts, not a campaign — it says the stack works, not how fast B300 is.
+### B300 results (p6-b300.48xlarge × 2, 2026-09-03)
 
-**What does not transfer from the p5en tables.** The `sm_103` numbers we do have in depth
-come from a *different* image (the AWS `awsome-distributed-ai#1234` recipe: CUDA 13.1.2,
-torch 2.11, same DeepEP pin) and live in `../adai-ep-comparison-b300/RESULTS_b300.md`. From
-that campaign, two things matter here: PR #2's clamp reproduces on b300 and is *larger*
-(decode dispatch −37.6% vs −33.5% on p5en), but **PR #1's `EP_NUM_SUB_PARTS=1` is
-neutral-to-slightly-negative on `sm_103`** where it stacks on p5en — so the "set
-`EP_NUM_SUB_PARTS=1`" advice in *[Decode — two independent wins](#decode---num-tokens128--two-independent-wins-that-stack)*
-is Hopper-specific. And on b300 the clamp **flattens** the SM curve instead of moving the
-optimum: patched 12 SM ties patched 24 SM.
+Four arms — `main` `54fffef`, PRs #1+#2 `bfbdd15`, PRs #8+#9 `3c737dc`, and the merge of
+the two, `a35285f` — on B300-1/B300-2 in ap-northeast-2, host installer **1.50.0** /
+`efa.ko` **3.3.0** (upgraded from the factory 1.49.0 with `prepare_host_efa150.sh`, no
+reboot needed, 16× `CE OK`). 2 nodes / 16 ranks, **12 SM**, GIN type 5,
+`--prefer-overlap-with-compute=0`, FP8 dispatch at alignment 128. 13 cells × 3 rotated
+reps, **39/39 rc 0**, every cell pooled 16/16 ranks from both nodes, cross-rep spread
+**≤ 0.5%**. Raw logs and the generated tables:
+[`results/b300_stack_20260903/`](results/b300_stack_20260903/tables.txt) — the b300
+generator is a 20-line driver over the p5en one, so both campaigns share their
+arithmetic. Layer = dispatch + reduced combine. **Every row is at the default part
+geometry**, so one knob serves the whole table and the rows stay comparable; the one cell
+where `EP_NUM_SUB_PARTS=1` would beat the default is #1+#2's prefill (layer 4823.6 µs,
+−0.9%), and point 4 gives that axis in full:
+
+| arm | decode dispatch | decode layer | prefill dispatch | prefill layer |
+|---|---|---|---|---|
+| `main` | 277.5 µs | 458.1 µs | 1056.2 µs | 4867.4 µs |
+| #1+#2 | 127.8 **−53.9%** | 308.3 −32.7% | 1054.9 −0.1% | 4859.5 −0.2% |
+| #8+#9 | 209.7 −24.4% | 378.4 −17.4% | 947.6 **−10.3%** | 4497.5 −7.6% |
+| **stack** | **118.1 −57.4%** | **286.4 −37.5%** | 947.8 −10.3% | **4493.5 −7.7%** |
+
+**Four things do not transfer from the p5en tables**, and all four are the shape of the
+machine rather than noise (p5en rows from
+[`results/p5en_stack_20260831/tables.txt`](results/p5en_stack_20260831/tables.txt), same
+cells, same generator):
+
+1. **#1+#2 is worth roughly double on b300** — decode dispatch −53.9% against p5en's
+   170.3 → 113.8 µs (−33.2%). The reason is in the `main` column: b300's unpatched decode
+   dispatch is **1.63× slower in absolute time** than p5en's (277.5 vs 170.3 µs) *despite
+   twice the wire*, and this PR pair is what removes that penalty. After the stack the two
+   machines converge — 118.1 vs 113.9 µs.
+2. **#8+#9's combine win roughly halves** — decode reduced combine −6.6% (180.6 → 168.7 µs)
+   against p5en's −16.6%, prefill reduced combine −6.9% (3811.2 → 3549.8 µs) against
+   p5en's −14.1%. b300's combine never cashed the doubled wire either (3811.2 vs 4297.1 µs
+   is 1.13×, not 2×), so there was less headroom to win back.
+3. **#8+#9 gains a prefill *dispatch* win that does not exist on p5en** — 1056.2 → 947.6 µs
+   (−10.3%), where the same cell on p5en measures +0.0% (1503.6 → 1504.1 µs). So on b300
+   the prefill benefit is dispatch-side; on p5en it is entirely combine-side.
+4. **`EP_NUM_SUB_PARTS=1` buys nothing on b300 decode, and on prefill its sign depends on
+   #8+#9.** In decode it is inert here — stack 118.7 vs 118.1 µs of dispatch, #1+#2 127.7
+   vs 127.8 — where on p5en it was worth 8.5 µs to the stack. In prefill dispatch it *helps*
+   #1+#2 alone (1016.0 vs 1054.9 µs, −39.0) but *costs the stack* **+102 µs** (1050.1 vs
+   947.8), wiping out most of #8+#9's dispatch gain. So on the arm you would actually
+   deploy, leave it unset on prefill instances; the "set `EP_NUM_SUB_PARTS=1`" advice in
+   *[Decode — two independent wins](#decode---num-tokens128--two-independent-wins-that-stack)*
+   is Hopper-specific.
+
+**Additivity.** Decode dispatch residual (measured stack − [main + both single-arm savings])
+is **58.1 µs = 39%** of the larger single win, so the two PRs overlap far less on b300 than
+on p5en (85%); decode combine residual is −0.3 µs, i.e. fully additive. The negative control
+`main` + `EP_NUM_SUB_PARTS=1` moved decode dispatch **+0.5%** (278.9 vs 277.5 µs), which is
+what it should do in an image whose JIT never reads that variable.
+
+An older `sm_103` campaign on a *different* image (the AWS `awsome-distributed-ai#1234`
+recipe: CUDA 13.1.2, torch 2.11, same DeepEP pin) is in
+`../adai-ep-comparison-b300/RESULTS_b300.md`. It agrees on direction where the two overlap
+(clamp larger on b300, `EP_NUM_SUB_PARTS=1` neutral there) but its denominators differ, so
+do not interleave its rows with the table above.
 
 ## Results (p5en.48xlarge × 2 and × 4, 2026-08-25)
 
@@ -952,13 +1000,13 @@ needs an image rebuild.
    selects BF16 alone — `TEST_FIRST_ONLY=0` runs the entire mode product (hours). The one
    BF16 data point we have, from the b300 kit, says BF16 dispatch is the *slower* arm, so
    nothing here is flattered by the choice; it is still an unmeasured axis.
-8. **This image on `sm_103`** — a real campaign (2 runs: prefill + decode, 3 reps, SM axis).
-   B300 is only a spot check so far (see *B300 / `sm_103`*), and the numbers we quote in
-   depth for b300 come from a different image, so nothing on this page is
-   architecture-comparable. The build and the launcher now handle b300, so this is
-   `./build_image.sh` on each node (twice, if you want the `prs` arm) followed by
-   `NODES="<leader> <worker>" ./run_campaign.sh` — the `sm103` cell list exists and
-   includes a 12-SM prefill cell that lines up with the spot check above.
+8. **The `--num-sms` axis on `sm_103`** (an SM scan, 4 arms × 3 reps ≈ 1.6 h per SM
+   count). The b300 campaign in *[B300 results](#b300-results-p6-b30048xlarge--2-2026-09-03)*
+   is 12 SM only, chosen to match the p5en stack campaign cell for cell. The older
+   different-image b300 run says the clamp **flattens** the SM curve there (patched 12 SM
+   ties patched 24 SM) instead of moving the optimum, so 12 SM is a defensible default —
+   but on *this* image the axis is untested on b300, and the auto-detected value is low
+   for the reason above.
 
 ## Files
 

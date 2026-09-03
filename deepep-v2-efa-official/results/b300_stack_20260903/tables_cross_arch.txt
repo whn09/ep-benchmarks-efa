@@ -1,0 +1,66 @@
+b300 logs: /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_stack_20260903/logs
+p5en logs: /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/p5en_stack_20260831/logs
+
+PREFILL -- 8192 tok/rank, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0, default knob
+  b300 = 2x p6-b300 (sm_103, 100 GB/s per GPU, EFA 1.50.0 / efa.ko 3.3.0)
+  p5en = 2x p5en    (sm_90,   50 GB/s per GPU)
+
+  op                 arm            b300 us      p5en us  b300/p5en
+  ------------------------------------------------------------------
+  dispatch           main            1056.2 1503.6 (n=1)      0.70x
+                     PR #1+#2        1054.9           --         --
+                     PR #8+#9         947.6 1504.1 (n=1)      0.63x
+                     stack            947.8 1506.0 (n=1)      0.63x
+
+  expanded dispatch  main            1054.0 1508.4 (n=1)      0.70x
+                     PR #1+#2        1053.5           --         --
+                     PR #8+#9         945.7 1508.0 (n=1)      0.63x
+                     stack            946.1 1508.9 (n=1)      0.63x
+
+  cached dispatch    main            1042.2 1595.0 (n=1)      0.65x
+                     PR #1+#2        1042.3           --         --
+                     PR #8+#9         940.4 1505.9 (n=1)      0.62x
+                     stack            940.3 1506.4 (n=1)      0.62x
+
+  combine            main            2927.4 3613.7 (n=1)      0.81x
+                     PR #1+#2        2924.5           --         --
+                     PR #8+#9        2817.4 3190.3 (n=1)      0.88x
+                     stack           2816.0 3192.4 (n=1)      0.88x
+
+  reduced combine    main            3811.2 4297.1 (n=1)      0.89x
+                     PR #1+#2        3804.6           --         --
+                     PR #8+#9        3549.8 3691.9 (n=1)      0.96x
+                     stack           3545.7 3692.8 (n=1)      0.96x
+
+
+DECODE -- 128 tok/rank, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0, default knob
+  b300 = 2x p6-b300 (sm_103, 100 GB/s per GPU, EFA 1.50.0 / efa.ko 3.3.0)
+  p5en = 2x p5en    (sm_90,   50 GB/s per GPU)
+
+  op                 arm            b300 us      p5en us  b300/p5en
+  ------------------------------------------------------------------
+  dispatch           main             277.5        170.3      1.63x
+                     PR #1+#2         127.8        113.8      1.12x
+                     PR #8+#9         209.7        123.7      1.70x
+                     stack            118.1  113.9 (n=1)      1.04x
+
+  expanded dispatch  main             278.0        169.9      1.64x
+                     PR #1+#2         127.6        113.1      1.13x
+                     PR #8+#9         209.4        126.7      1.65x
+                     stack            118.8  113.9 (n=1)      1.04x
+
+  cached dispatch    main             262.7        165.9      1.58x
+                     PR #1+#2         115.6        108.6      1.06x
+                     PR #8+#9         207.7        119.5      1.74x
+                     stack            110.6  110.5 (n=1)      1.00x
+
+  combine            main             162.4        163.9      0.99x
+                     PR #1+#2         162.2        163.7      0.99x
+                     PR #8+#9         160.3        144.5      1.11x
+                     stack            160.2  144.2 (n=1)      1.11x
+
+  reduced combine    main             180.6        180.5      1.00x
+                     PR #1+#2         180.5        180.8      1.00x
+                     PR #8+#9         168.7        150.6      1.12x
+                     stack            168.3  150.6 (n=1)      1.12x
+

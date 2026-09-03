@@ -1,0 +1,168 @@
+=== EP_NIC_NAME=rdmap101s0 (auto, 400 Gb/s) ===
+=== NCCL_IB_HCA=rdmap (auto: non-EFA ibverbs device ibp198s0f0 present) ===
+=== GIN: NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0 ===
+=== PREFER_OVERLAP=0 (--prefer-overlap-with-compute) ===
+=== IMAGE=deepep-v2-efa-official:sm103-54fffef  DeepEP=54fffeff810723f574c574b1790dff189f3c6ffb ===
++ docker run --rm --init --gpus all --privileged --network=host --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/infiniband --device=/dev/gdrdrv -v /sys/class/infiniband:/sys/class/infiniband:ro -e MASTER_ADDR=172.31.24.154 -e MASTER_PORT=8528 -e WORLD_SIZE=2 -e RANK=0 -e NCCL_DEBUG=WARN -e EP_NIC_NAME=rdmap101s0 -e NCCL_IB_HCA=rdmap -e NCCL_GIN_TYPE=5 -e NCCL_SYM_GIN_KERNELS_ENABLE=0 -e PYTHONUNBUFFERED=1 -e PYTHONFAULTHANDLER=1 deepep-v2-efa-official:sm103-54fffef bash -lc 'timeout -s ABRT --kill-after=60 1800     python3 -u /opt/DeepEP/tests/elastic/test_ep.py     --num-processes=8 --num-tokens=128     --hidden=7168 --num-topk=8 --num-experts=256     --num-sms=12 --allow-hybrid-mode=1     --prefer-overlap-with-compute=0 --test-first-only      '
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 13.3.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+NCCL version 2.31.2+cuda13.3
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+Config:
+ > Ranks: 2 x 8
+ > Experts: 8/256
+ > Tokens: 128 (max: 128), hidden: 7168
+ > #SM: 12, #QPs: 11/11
+
+Running all test cases:
+ > Testing with do_handle_copy=1, expert_alignment=128, use_fp8_dispatch=1, num_bias=0, with_previous_event=0, async_with_compute_stream=0, allocate_on_comm_stream=0 ...
+USDT:2026-09-03 07:10:14 492:492 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 491:491 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 489:489 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 487:487 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 490:490 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 486:486 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 493:493 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 488:488 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+
+
+USDT:2026-09-03 07:10:14 492:492 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:14 491:491 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:14 488:488 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:14 490:490 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:14 489:489 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:14 487:487 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+
+
+
+USDT:2026-09-03 07:10:14 486:486 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:14 493:493 SyncActivityProfilerHandler.cpp:59] profiler_stop
+   * EP:   5/16 | dispatch: 7 GB/s (SO), 20 GB/s (SU), 282.086 us, 5705856 bytes | copy: 288 GB/s, 39.569 us   * EP:   1/16 | dispatch: 7 GB/s (SO), 20 GB/s (SU), 281.703 us, 5720832 bytes | copy: 512 GB/s, 22.353 us
+
+   * EP:   2/16 | dispatch: 7 GB/s (SO), 21 GB/s (SU), 282.293 us, 5840640 bytes | copy: 332 GB/s, 35.137 us
+   * EP:   3/16 | dispatch: 7 GB/s (SO), 21 GB/s (SU), 281.553 us, 5855616 bytes | copy: 725 GB/s, 16.153 us
+   * EP:   0/16 | dispatch: 7 GB/s (SO), 21 GB/s (SU), 280.148 us, 5750784 bytes | copy: 695 GB/s, 16.546 us
+   * EP:   6/16 | dispatch: 6 GB/s (SO), 21 GB/s (SU), 281.189 us, 5937984 bytes | copy: 672 GB/s, 17.679 us
+   * EP:   4/16 | dispatch: 7 GB/s (SO), 20 GB/s (SU), 281.329 us, 5623488 bytes | copy: 588 GB/s, 19.112 us
+   * EP:   7/16 | dispatch: 6 GB/s (SO), 21 GB/s (SU), 282.601 us, 5937984 bytes | copy: 265 GB/s, 44.746 us
+USDT:2026-09-03 07:10:14 492:492 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 488:488 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 491:491 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 486:486 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 487:487 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:14 490:490 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:14 489:489 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+
+
+USDT:2026-09-03 07:10:14 493:493 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:15 490:490 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:15 491:491 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:15 492:492 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:15 489:489 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:15 487:487 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:15 488:488 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:15 486:486 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:15 493:493 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+
+   - EP:   0/16 | expanded dispatch: 7 GB/s (SO), 21 GB/s (SU), 278.901 us, 5750784 bytes | copy: 1258 GB/s, 16.366 us
+   - EP:   6/16 | expanded dispatch: 6 GB/s (SO), 21 GB/s (SU), 279.319 us, 5937984 bytes | copy: 1508 GB/s, 13.818 us
+   - EP:   7/16 | expanded dispatch: 6 GB/s (SO), 21 GB/s (SU), 280.475 us, 5937984 bytes | copy: 498 GB/s, 41.631 us
+   - EP:   1/16 | expanded dispatch: 7 GB/s (SO), 20 GB/s (SU), 279.443 us, 5720832 bytes | copy: 1168 GB/s, 17.565 us
+   - EP:   3/16 | expanded dispatch: 7 GB/s (SO), 21 GB/s (SU), 279.493 us, 5855616 bytes | copy: 1116 GB/s, 18.526 us
+   - EP:   2/16 | expanded dispatch: 7 GB/s (SO), 21 GB/s (SU), 280.446 us, 5840640 bytes | copy: 604 GB/s, 34.284 us
+   - EP:   4/16 | expanded dispatch: 7 GB/s (SO), 20 GB/s (SU), 279.958 us, 5623488 bytes | copy: 948 GB/s, 21.574 us
+   - EP:   5/16 | expanded dispatch: 7 GB/s (SO), 20 GB/s (SU), 279.813 us, 5705856 bytes | copy: 556 GB/s, 36.917 us
+USDT:2026-09-03 07:10:15 492:492 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 488:488 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 486:486 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 489:489 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 487:487 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 490:490 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:15 493:493 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+
+
+
+
+
+USDT:2026-09-03 07:10:15 491:491 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:16 490:490 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 492:492 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 486:486 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 491:491 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 487:487 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:16 488:488 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 493:493 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 489:489 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+
+
+
+
+   # EP:   6/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 265.611 us, 5937984 bytes | copy: 1312 GB/s, 9.053 us
+   # EP:   4/16 | cached dispatch: 7 GB/s (SO), 21 GB/s (SU), 265.719 us, 5623488 bytes | copy: 834 GB/s, 13.482 us
+   # EP:   3/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 265.408 us, 5855616 bytes | copy: 968 GB/s, 12.095 us
+   # EP:   2/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 265.797 us, 5840640 bytes | copy: 532 GB/s, 21.971 us
+   # EP:   1/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 265.782 us, 5720832 bytes | copy: 838 GB/s, 13.656 us
+   # EP:   5/16 | cached dispatch: 7 GB/s (SO), 21 GB/s (SU), 266.299 us, 5705856 bytes | copy: 408 GB/s, 27.977 us
+   # EP:   0/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 263.848 us, 5750784 bytes | copy: 903 GB/s, 12.734 us
+   # EP:   7/16 | cached dispatch: 7 GB/s (SO), 22 GB/s (SU), 266.366 us, 5937984 bytes | copy: 373 GB/s, 31.848 us
+USDT:2026-09-03 07:10:16 492:492 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:16 493:493 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:16 486:486 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:16 491:491 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:16 490:490 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:16 489:489 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:16 487:487 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:16 488:488 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+
+
+USDT:2026-09-03 07:10:16 492:492 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 489:489 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:16 488:488 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:16 491:491 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:16 486:486 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:16 490:490 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:16 487:487 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:16 493:493 SyncActivityProfilerHandler.cpp:59] profiler_stop
+   @ EP:   6/16 | combine: 21 GB/s (SO), 69 GB/s (SU), 165.435 us, 11393824 bytes | reduce: 965 GB/s, 5.403 us
+   @ EP:   5/16 | combine: 22 GB/s (SO), 68 GB/s (SU), 160.666 us, 10948416 bytes | reduce: 968 GB/s, 5.461 us
+   @ EP:   3/16 | combine: 22 GB/s (SO), 68 GB/s (SU), 165.116 us, 11235776 bytes | reduce: 1006 GB/s, 5.354 us
+   @ EP:   4/16 | combine: 21 GB/s (SO), 65 GB/s (SU), 164.744 us, 10790368 bytes | reduce: 957 GB/s, 5.556 us
+   @ EP:   1/16 | combine: 23 GB/s (SO), 68 GB/s (SU), 161.414 us, 10977152 bytes | reduce: 1026 GB/s, 5.338 us
+   @ EP:   2/16 | combine: 22 GB/s (SO), 69 GB/s (SU), 162.865 us, 11207040 bytes | reduce: 1014 GB/s, 5.358 us   @ EP:   0/16 | combine: 22 GB/s (SO), 67 GB/s (SU), 165.774 us, 11034624 bytes | reduce: 977 GB/s, 5.635 us
+
+   @ EP:   7/16 | combine: 23 GB/s (SO), 75 GB/s (SU), 150.933 us, 11393824 bytes | reduce: 955 GB/s, 5.463 us
+USDT:2026-09-03 07:10:17 491:491 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:17 488:488 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:17 490:490 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:17 489:489 SyncActivityProfilerHandler.cpp:52] profiler_start
+USDT:2026-09-03 07:10:17 486:486 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+USDT:2026-09-03 07:10:17 493:493 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:17 492:492 SyncActivityProfilerHandler.cpp:52] profiler_startUSDT:2026-09-03 07:10:17 487:487 SyncActivityProfilerHandler.cpp:52] profiler_start
+
+
+USDT:2026-09-03 07:10:17 491:491 SyncActivityProfilerHandler.cpp:59] profiler_stop
+USDT:2026-09-03 07:10:17 488:488 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:17 490:490 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:17 486:486 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:17 492:492 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:17 489:489 SyncActivityProfilerHandler.cpp:59] profiler_stopUSDT:2026-09-03 07:10:17 487:487 SyncActivityProfilerHandler.cpp:59] profiler_stop
+
+USDT:2026-09-03 07:10:17 493:493 SyncActivityProfilerHandler.cpp:59] profiler_stop
+   + EP:   6/16 | reduced combine: 19 GB/s (SO), 62 GB/s (SU), 184.868 us, 11393824 bytes | reduce: 967 GB/s, 5.394 us
+   + EP:   5/16 | reduced combine: 20 GB/s (SO), 62 GB/s (SU), 175.725 us, 10948416 bytes | reduce: 975 GB/s, 5.421 us   + EP:   4/16 | reduced combine: 19 GB/s (SO), 59 GB/s (SU), 182.441 us, 10790368 bytes | reduce: 973 GB/s, 5.462 us
+
+   + EP:   3/16 | reduced combine: 20 GB/s (SO), 61 GB/s (SU), 183.281 us, 11235776 bytes | reduce: 974 GB/s, 5.534 us
+   + EP:   2/16 | reduced combine: 20 GB/s (SO), 62 GB/s (SU), 179.667 us, 11207040 bytes | reduce: 1022 GB/s, 5.315 us
+   + EP:   1/16 | reduced combine: 20 GB/s (SO), 61 GB/s (SU), 180.127 us, 10977152 bytes | reduce: 1002 GB/s, 5.465 us
+   + EP:   0/16 | reduced combine: 20 GB/s (SO), 60 GB/s (SU), 183.678 us, 11034624 bytes | reduce: 1008 GB/s, 5.460 us
+   + EP:   7/16 | reduced combine: 20 GB/s (SO), 67 GB/s (SU), 169.957 us, 11393824 bytes | reduce: 959 GB/s, 5.436 us
+
+

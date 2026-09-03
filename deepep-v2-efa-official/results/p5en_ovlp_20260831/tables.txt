@@ -1,0 +1,278 @@
+EPRUNS=/Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/p5en_ovlp_20260831/logs
+
+CONFIG -- read out of the logs, not assumed
+
+  arm       tag      ovlp   BUILD_REF                                  #SM    #QPs    
+  main      54fffef  0      54fffeff810723f574c574b1790dff189f3c6ffb   12     11/11   
+  main      54fffef  1      54fffeff810723f574c574b1790dff189f3c6ffb   12     11/11   
+  PR #8+#9  3c737dc  0      3c737dcf0da5889ba7efd26e05b4808307cc38af   12     13/13   
+  PR #8+#9  3c737dc  1      3c737dcf0da5889ba7efd26e05b4808307cc38af   12     13/13   
+
+  #QPs must read 13/13 on the #8+#9 rows at BOTH overlap values -- the QP
+  bump is not guarded by the flag, and that is the premise of the bracket.
+  The clamp removal changes CHANNELS at a fixed SM count, so it is invisible
+  in #SM: the flag is the only handle on it.
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5
+  each arm is compared only against main AT THE SAME overlap value.
+
+  op                 arm       ovlp           us  d vs main SO GB/s      per-rep us
+  ---------------------------------------------------------------------------------
+  dispatch           main      0          1505.2            81-81        1507.0 / 1504.1 / 1504.5
+                     PR #8+#9  0          1507.5      +0.2% 81-81        1507.7 / 1508.3 / 1506.5
+                     main      1          1571.8            77-78        1571.0 / 1571.9 / 1572.4
+                     PR #8+#9  1          1572.9      +0.1% 77-78        1572.8 / 1573.2 / 1572.7
+
+  expanded dispatch  main      0          1507.8            81-81        1508.0 / 1507.0 / 1508.5
+                     PR #8+#9  0          1507.5      -0.0% 81-81        1507.0 / 1507.5 / 1508.0
+                     main      1          1573.8            77-78        1574.5 / 1574.5 / 1572.5
+                     PR #8+#9  1          1576.0      +0.1% 77-78        1575.3 / 1575.7 / 1577.0
+
+  cached dispatch    main      0          1594.7            76-77        1595.5 / 1593.5 / 1595.0
+                     PR #8+#9  0          1505.3      -5.6% 81-81        1505.5 / 1504.4 / 1506.0
+                     main      1          1671.2            73-73        1672.0 / 1670.0 / 1671.5
+                     PR #8+#9  1          1575.8      -5.7% 77-78        1573.9 / 1576.5 / 1577.0
+
+  combine            main      0          3588.2            60-73        3556.4 / 3618.9 / 3589.4
+                     PR #8+#9  0          3196.2     -10.9% 69-77        3182.6 / 3195.8 / 3210.2
+                     main      1          3487.9            62-77        3489.2 / 3493.2 / 3481.2
+                     PR #8+#9  1          3254.2      -6.7% 67-78        3251.2 / 3257.4 / 3254.0
+
+  reduced combine    main      0          4277.9            52-59        4265.1 / 4292.2 / 4276.5
+                     PR #8+#9  0          3715.7     -13.1% 60-66        3725.4 / 3722.6 / 3699.1
+                     main      1          3607.4            60-73        3609.8 / 3608.5 / 3603.9
+                     PR #8+#9  1          3415.2      -5.3% 64-74        3424.6 / 3397.7 / 3423.4
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5
+  each arm is compared only against main AT THE SAME overlap value.
+
+  op                 arm       ovlp           us  d vs main SO GB/s      per-rep us
+  ---------------------------------------------------------------------------------
+  dispatch           main      0           169.7            10-11        169.1 / 170.1 / 169.9
+                     PR #8+#9  0           123.9     -27.0% 13-15        126.3 / 123.0 / 122.5
+                     main      1           150.4            11-13        150.7 / 149.6 / 151.0
+                     PR #8+#9  1           116.6     -22.5% 15-16        116.1 / 115.7 / 118.1
+
+  expanded dispatch  main      0           169.4            10-11        169.3 / 169.2 / 169.6
+                     PR #8+#9  0           122.4     -27.7% 14-16        122.9 / 122.1 / 122.1
+                     main      1           150.8            11-13        151.2 / 149.7 / 151.6
+                     PR #8+#9  1           115.4     -23.5% 15-16        115.4 / 115.0 / 115.7
+
+  cached dispatch    main      0           166.0            10-11        165.7 / 165.9 / 166.4
+                     PR #8+#9  0           120.4     -27.5% 14-16        120.0 / 119.5 / 121.5
+                     main      1           144.7            12-13        145.1 / 144.3 / 144.7
+                     PR #8+#9  1           112.8     -22.0% 15-17        112.8 / 112.4 / 113.2
+
+  combine            main      0           163.8            20-22        163.7 / 164.0 / 163.6
+                     PR #8+#9  0           144.8     -11.6% 23-25        145.3 / 144.5 / 144.8
+                     main      1           166.3            20-22        166.2 / 166.4 / 166.2
+                     PR #8+#9  1           144.2     -13.3% 23-25        144.3 / 144.1 / 144.2
+
+  reduced combine    main      0           180.5            18-20        180.5 / 180.9 / 180.0
+                     PR #8+#9  0           151.0     -16.3% 22-24        151.0 / 151.0 / 151.0
+                     main      1           173.0            19-21        172.9 / 173.2 / 173.0
+                     PR #8+#9  1           149.2     -13.8% 22-24        148.9 / 149.2 / 149.5
+
+BRACKET -- PREFILL (8192 tok): splitting PR #8+#9's four changes
+
+  D1 = #9 - main at ovlp=1  -> QP bump + remote-first only (the other two
+       hunks are compiled out by the flag)
+  D0 = #9 - main at ovlp=0  -> all four changes (the shipped configuration)
+  D0-D1                     -> clamp removal + forward-warp pairing
+
+  op                        D1 us         D1 %        D0 us         D0 %
+                                                                        
+  dispatch                    1.1         0.1%          2.3         0.2%
+  expanded dispatch           2.2         0.1%         -0.3        -0.0%
+  cached dispatch           -95.4        -5.7%        -89.4        -5.6%
+  combine                  -233.6        -6.7%       -392.1       -10.9%
+  reduced combine          -192.2        -5.3%       -562.2       -13.1%
+  layer total              -191.0        -3.7%       -559.9        -9.7%
+
+  op                       D0-D1 us   reading
+  dispatch                      1.2   no win at either value
+  expanded dispatch            -2.5   clamp+pairing help (2.5 us of the 0.3 us win)
+  cached dispatch               6.0   the win comes from the unguarded two; clamp+pairing cost 6.0 us
+  combine                    -158.4   clamp+pairing help (158.4 us of the 392.1 us win)
+  reduced combine            -370.1   clamp+pairing help (370.1 us of the 562.2 us win)
+  layer total                -368.9   clamp+pairing help (368.9 us of the 559.9 us win)
+
+  This is a bracket, not an attribution: ovlp=1 also changes
+  double-buffering and warp counts, so D1 is measured in a different kernel
+  configuration than D0. Reverting the two guarded hunks in a build is the
+  only way to close that gap.
+
+BRACKET -- DECODE (128 tok): splitting PR #8+#9's four changes
+
+  D1 = #9 - main at ovlp=1  -> QP bump + remote-first only (the other two
+       hunks are compiled out by the flag)
+  D0 = #9 - main at ovlp=0  -> all four changes (the shipped configuration)
+  D0-D1                     -> clamp removal + forward-warp pairing
+
+  op                        D1 us         D1 %        D0 us         D0 %
+                                                                        
+  dispatch                  -33.8       -22.5%        -45.8       -27.0%
+  expanded dispatch         -35.4       -23.5%        -47.0       -27.7%
+  cached dispatch           -31.9       -22.0%        -45.6       -27.5%
+  combine                   -22.1       -13.3%        -18.9       -11.6%
+  reduced combine           -23.8       -13.8%        -29.5       -16.3%
+  layer total               -57.6       -17.8%        -75.3       -21.5%
+
+  op                       D0-D1 us   reading
+  dispatch                    -12.0   clamp+pairing help (12.0 us of the 45.8 us win)
+  expanded dispatch           -11.6   clamp+pairing help (11.6 us of the 47.0 us win)
+  cached dispatch             -13.7   clamp+pairing help (13.7 us of the 45.6 us win)
+  combine                       3.2   the win comes from the unguarded two; clamp+pairing cost 3.2 us
+  reduced combine              -5.7   clamp+pairing help (5.7 us of the 29.5 us win)
+  layer total                 -17.6   clamp+pairing help (17.6 us of the 75.3 us win)
+
+  This is a bracket, not an attribution: ovlp=1 also changes
+  double-buffering and warp counts, so D1 is measured in a different kernel
+  configuration than D0. Reverting the two guarded hunks in a build is the
+  only way to close that gap.
+
+HEADLINE -- PREFILL (8192 tok). Generated; do not edit these sentences by hand.
+
+  dispatch: FLAT -- 1505.2 -> 1507.5 us at ovlp=0 (+0.15%) and 1571.8 -> 1572.9
+    at ovlp=1 (+0.07%). Both inside 1% of the baseline, which is the
+    scale of the rep spread here, so there is no win to attribute.
+
+  reduced combine: PR #8+#9 saves 562.2 us (13.1%) at the shipped ovlp=0
+    (4277.9 -> 3715.7 us). With the flag ON, which compiles out the clamp
+    removal and the warp pairing, it still saves 192.2 us (5.3%)
+    (3607.4 -> 3415.2 us) -- so the two UNGUARDED changes (QP bump 11 -> 13,
+    remote-first scheduling) account for about 34% of it and the two
+    guarded ones for the remaining 66% (370.1 us).
+
+HEADLINE -- DECODE (128 tok). Generated; do not edit these sentences by hand.
+
+  dispatch: PR #8+#9 saves 45.8 us (27.0%) at the shipped ovlp=0
+    (169.7 -> 123.9 us). With the flag ON, which compiles out the clamp
+    removal and the warp pairing, it still saves 33.8 us (22.5%)
+    (150.4 -> 116.6 us) -- so the two UNGUARDED changes (QP bump 11 -> 13,
+    remote-first scheduling) account for about 74% of it and the two
+    guarded ones for the remaining 26% (12.0 us).
+
+  reduced combine: PR #8+#9 saves 29.5 us (16.3%) at the shipped ovlp=0
+    (180.5 -> 151.0 us). With the flag ON, which compiles out the clamp
+    removal and the warp pairing, it still saves 23.8 us (13.8%)
+    (173.0 -> 149.2 us) -- so the two UNGUARDED changes (QP bump 11 -> 13,
+    remote-first scheduling) account for about 81% of it and the two
+    guarded ones for the remaining 19% (5.7 us).
+
+FLAG AS A CONFIGURATION -- PREFILL (8192 tok), ovlp=0 vs ovlp=1 within one arm
+  dispatch + reduced combine, the pair a MoE layer issues.
+
+  arm               op     ovlp=0     ovlp=1          d       d %
+  main        dispatch     1505.2     1571.8       66.6      4.4%
+               redComb     4277.9     3607.4     -670.5    -15.7%
+                 layer     5783.1     5179.2     -604.0    -10.4%
+  PR #8+#9    dispatch     1507.5     1572.9       65.4      4.3%
+               redComb     3715.7     3415.2     -300.5     -8.1%
+                 layer     5223.2     4988.1     -235.0     -4.5%
+
+  test_ep.py issues no concurrent compute, so a flag whose purpose is to
+  overlap with compute is being measured with nothing to overlap. Read these
+  as pure-communication cost, and do not conclude anything about end-to-end
+  throughput under load from them.
+
+FLAG AS A CONFIGURATION -- DECODE (128 tok), ovlp=0 vs ovlp=1 within one arm
+  dispatch + reduced combine, the pair a MoE layer issues.
+
+  arm               op     ovlp=0     ovlp=1          d       d %
+  main        dispatch      169.7      150.4      -19.3    -11.3%
+               redComb      180.5      173.0       -7.5     -4.1%
+                 layer      350.2      323.4      -26.7     -7.6%
+  PR #8+#9    dispatch      123.9      116.6       -7.3     -5.9%
+               redComb      151.0      149.2       -1.8     -1.2%
+                 layer      274.9      265.8       -9.1     -3.3%
+
+  test_ep.py issues no concurrent compute, so a flag whose purpose is to
+  overlap with compute is being measured with nothing to overlap. Read these
+  as pure-communication cost, and do not conclude anything about end-to-end
+  throughput under load from them.
+
+NODE LAYERING -- per-node mean us, 128 tok
+  combine splits by machine and the slow machine flips between runs, so a
+  table built from one node is wrong by this much. Every number above pools
+  all 16 ranks from both logs.
+
+  dispatch:
+    arm       ovlp   rep    per-node mean us         max-min
+    main      0      rep1   n1 170 n2 168            1.6%
+    main      0      rep2   n1 171 n2 169            1.4%
+    main      0      rep3   n1 171 n2 169            1.3%
+    main      1      rep1   n1 152 n2 149            2.0%
+    main      1      rep2   n1 151 n2 148            1.9%
+    main      1      rep3   n1 153 n2 149            2.3%
+    PR #8+#9  0      rep1   n1 128 n2 125            2.3%
+    PR #8+#9  0      rep2   n1 124 n2 122            1.2%
+    PR #8+#9  0      rep3   n1 123 n2 122            1.5%
+    PR #8+#9  1      rep1   n1 117 n2 115            1.8%
+    PR #8+#9  1      rep2   n1 117 n2 114            2.8%
+    PR #8+#9  1      rep3   n1 120 n2 116            3.7%
+
+  reduced combine:
+    arm       ovlp   rep    per-node mean us         max-min
+    main      0      rep1   n1 184 n2 178            3.4%
+    main      0      rep2   n1 184 n2 178            3.8%
+    main      0      rep3   n1 183 n2 177            3.6%
+    main      1      rep1   n1 175 n2 170            3.0%
+    main      1      rep2   n1 176 n2 171            2.8%
+    main      1      rep3   n1 176 n2 170            3.3%
+    PR #8+#9  0      rep1   n1 155 n2 147            5.3%
+    PR #8+#9  0      rep2   n1 155 n2 147            5.3%
+    PR #8+#9  0      rep3   n1 155 n2 147            6.0%
+    PR #8+#9  1      rep1   n1 152 n2 145            4.8%
+    PR #8+#9  1      rep2   n1 153 n2 146            4.6%
+    PR #8+#9  1      rep3   n1 153 n2 146            4.5%
+
+NODE LAYERING -- per-node mean us, 8192 tok
+  combine splits by machine and the slow machine flips between runs, so a
+  table built from one node is wrong by this much. Every number above pools
+  all 16 ranks from both logs.
+
+  dispatch:
+    arm       ovlp   rep    per-node mean us         max-min
+    main      0      rep1   n1 1506 n2 1508          0.1%
+    main      0      rep2   n1 1503 n2 1505          0.1%
+    main      0      rep3   n1 1503 n2 1506          0.2%
+    main      1      rep1   n1 1570 n2 1572          0.1%
+    main      1      rep2   n1 1569 n2 1575          0.4%
+    main      1      rep3   n1 1571 n2 1574          0.2%
+    PR #8+#9  0      rep1   n1 1507 n2 1508          0.1%
+    PR #8+#9  0      rep2   n1 1506 n2 1511          0.4%
+    PR #8+#9  0      rep3   n1 1505 n2 1508          0.2%
+    PR #8+#9  1      rep1   n1 1574 n2 1572          0.2%
+    PR #8+#9  1      rep2   n1 1572 n2 1575          0.2%
+    PR #8+#9  1      rep3   n1 1574 n2 1571          0.2%
+
+  reduced combine:
+    arm       ovlp   rep    per-node mean us         max-min
+    main      0      rep1   n1 4111 n2 4419          7.5%
+    main      0      rep2   n1 4494 n2 4091          9.8%
+    main      0      rep3   n1 4437 n2 4116          7.8%
+    main      1      rep1   n1 3335 n2 3885          16.5%
+    main      1      rep2   n1 3332 n2 3885          16.6%
+    main      1      rep3   n1 3329 n2 3878          16.5%
+    PR #8+#9  0      rep1   n1 3637 n2 3814          4.8%
+    PR #8+#9  0      rep2   n1 3640 n2 3806          4.6%
+    PR #8+#9  0      rep3   n1 3678 n2 3720          1.2%
+    PR #8+#9  1      rep1   n1 3564 n2 3285          8.5%
+    PR #8+#9  1      rep2   n1 3525 n2 3270          7.8%
+    PR #8+#9  1      rep3   n1 3220 n2 3627          12.6%
+
+AUDIT -- reps on disk and rank completeness. n must equal 16; a short n is
+  glued stdout lines, i.e. lost data, and invalidates that rep's mean.
+
+   8192tok ovlp0 main      rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok ovlp1 main      rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok ovlp0 PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok ovlp1 PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+    128tok ovlp0 main      rep1:16/16 rep2:16/16 rep3:16/16
+    128tok ovlp1 main      rep1:16/16 rep2:16/16 rep3:16/16
+    128tok ovlp0 PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+    128tok ovlp1 PR #8+#9  rep1:16/16 rep2:16/16 rep3:16/16
+
+  no rep was excluded as an outlier.
+

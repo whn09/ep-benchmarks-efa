@@ -9,7 +9,7 @@ campaign → 验收 → 生成和 §9 一样的表。按顺序走，每一步都
 | 机型 | GPU | arch | 每 GPU EFA | 每 GPU 线速 | 本文数字 |
 |---|---|---|---|---|---|
 | `p5en.48xlarge` | 8×H200 | `sm_90` | 1 张（共 16 张） | 50 GB/s | §9 全部（2 节点和 4 节点） |
-| `p6-b300.48xlarge` | 8×B300 | `sm_103` | 2 张（共 16 张） | 100 GB/s | §9.7：抽查通了，campaign 待跑 |
+| `p6-b300.48xlarge` | 8×B300 | `sm_103` | 2 张（共 16 张） | 100 GB/s | §9.10（2 节点四条臂） |
 
 机型差别只有三处，脚本会自己处理，但你需要知道它们存在（§5.3 讲机制）：CUDA base、
 `TORCH_CUDA_ARCH_LIST`、运行时 `NCCL_IB_HCA=rdmap`。B200 / `sm_100` 的参数已就位，没跑过。
@@ -22,6 +22,17 @@ campaign → 验收 → 生成和 §9 一样的表。按顺序走，每一步都
 | prefill dispatch（8192 tok） | 1502.9 µs | 81.2 | 81.2% |
 | prefill reduced combine | 4237.9 µs | — | — |
 | decode dispatch（128 tok） | 169.4 µs | — | — |
+
+**上面是 `main` 的数字；上游还有两组待合 PR，动的是不同的 op，叠起来才是最优点**（2 节点，
+12 SM，全 rank 均值，层总时间 = dispatch + reduced combine，**四行同一个 campaign**，
+§9.8）：
+
+| 臂 | decode 128 tok | prefill 8192 tok |
+|---|---|---|
+| `main` | 350.8 µs | 5800.7 µs |
+| `#1+#2`（dispatch 侧，§9.6） | 287.5（−18.1%） | 噪声 |
+| `#8+#9`（combine 侧，§9.7） | 274.3（−21.8%） | 5195.9（−10.4%） |
+| 四个叠加（§9.8） | **256.2（−26.9%）** | 5198.8（−10.4%，全部来自 `#8+#9`） |
 
 SM 数是一根真实的性能轴，不是安全默认值 —— **24 SM 换的是 combine 时间**（dispatch 只
 +2.2%，reduced combine −20.7%），而打了 §9.6 那两个 PR 之后 decode 反而 12 SM 更好。
@@ -230,19 +241,48 @@ campaign 驱动脚本的 `REPO_DIR` 默认值。放别处也能跑，但 §6 要
 `EP_BUILD_ARCH` / `EP_BUILD_CUDA`，启动前 `run_test_ep.sh` 会和 host 对一遍，不一致直接
 拒绝跑（要跨档硬跑：`ALLOW_ARCH_MISMATCH=1`）。
 
-### 4.2 第二条臂：两个待合的 PR
+### 4.2 另外几条臂：待合的 PR，和它们的叠加
 
-decode 的 part 几何有两个待合 PR（数据在 §9.6）。#1 是 #2 head 的祖先，所以**一个 ref 就是
-"两个 PR 叠加"**这条臂：
+`amazon-contributing/DeepEP` 上有**两组**待合 PR，动的是**不同的 op**：
+
+| 臂 | ref（2026-08-31 的 head） | 内容 | 数据 |
+|---|---|---|---|
+| `#1+#2` | `bfbdd15ff448783f877cb2210cb3246c8452b05e` | dispatch 侧：JIT env 转发 + part clamp | §9.6 |
+| `#8+#9` | `3c737dcf0da5889ba7efd26e05b4808307cc38af` | combine 侧：channel clamp、QP 11→13、forward warp 配对、remote-first | §9.7 |
+| 叠加 | 上面两个的 `git merge` | 四个 PR 一起 | §9.8 |
+
+每组里前一个 PR 都是后一个 head 的祖先（`#1` 是 `#2` 的、`#8` 是 `#9` 的），所以**一组只要一个
+ref**：
 
 ```bash
 gh pr view 2 --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid
-./build_image.sh sm103 bfbdd15ff448783f877cb2210cb3246c8452b05e
-# -> deepep-v2-efa-official:sm103-bfbdd15   （run_campaign.sh 默认找这个 tag）
+gh pr view 9 --repo amazon-contributing/DeepEP --json headRefOid --jq .headRefOid
+./build_image.sh sm90 bfbdd15ff448783f877cb2210cb3246c8452b05e   # -> :sm90-bfbdd15
+./build_image.sh sm90 3c737dcf0da5889ba7efd26e05b4808307cc38af   # -> :sm90-3c737dc
 ```
 
-PR head 会随 rebase 变，所以先用 `gh pr view` 取当前值再建。只关心 prefill 的话这条臂可以
-跳过：两个 PR 在 prefill 上是噪声（§9.6）。
+PR head 会随 rebase 变，所以先用 `gh pr view` 取当前值再建。只关心 prefill 的话 `#1+#2` 可以
+跳过（在 prefill 上是噪声，§9.6）；只关心 decode 的话两组都要，因为叠加才是最优点（§9.8）。
+
+**叠加这条臂不要推分支**。两组 PR 除 README 外文件不相交，`git merge` 无冲突，所以**两个父
+sha 加一次 merge 就完全决定了这棵树** —— 不需要在共享仓库上放一条 throwaway 分支：
+
+```bash
+./build_stack_image.sh sm90    # 默认就是上表那两个 ref
+# -> deepep-v2-efa-official:sm90-stack3c737dcxbfbdd15，BUILD_REF = a35285f（本地 merge commit）
+```
+
+它在 `#8+#9` 的镜像上加一层（省掉整个 CUDA base，只重跑一次 `setup.py install`），所以那个基础
+镜像必须先建好。两个坑都在 `Dockerfile.stack` 里堵住了，都会让"叠加"静默变成单臂：
+
+- **`GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` 必须钉死**，否则每台机器 merge 出来的 sha 不同，
+  同一条臂的两份 node 日志会戳两个不同的 `DeepEP=<sha>`。钉死后到处都是 `a35285f`；日志里另有
+  一行 `=== DeepEP is a MERGE of: <A> <B> ===`。
+- **先卸掉基础镜像里那份 `deep_ep`，装完再断言内容**。`easy-install.pth` 里两个 egg 是**按顺序**
+  而不是按安装时间解析的，所以半打补丁的镜像从外面根本看不出来。build 里有四条断言，查的是
+  **已安装包**的 include 目录（JIT 读的就是那份）：`_C.so` 里有 `EP_NUM_SUB_PARTS`、dispatch 头
+  里有 `kMinTokensPerPart`、combine 头里有 `kNumFwWarpsPerChannel`、`kDefaultGinContextCnt = 13`。
+  `kMaxParts` **不能**用来断言 —— `main` 上也有它。
 
 ### 4.3 镜像里装了什么（进容器自查）
 
@@ -444,8 +484,18 @@ NODES="<leader> <worker>" ./run_campaign.sh
 **12 SM 是工作点**（`run_test_ep.sh` 的默认），所以 `prs` 臂只在 12 SM 上量；24 SM 只挂在
 `official` 臂上，作为一根轴（取舍见 §10.2）。
 
-要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env"`，一行一个 cell。`prs` 臂的镜像
-（§4.2）不存在时那几个 cell **整条跳过并打一行提示**，不会一个一个失败。
+要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env|prefer_overlap"`，一行一个 cell。
+`prs` 臂的镜像（§4.2）不存在时那几个 cell **整条跳过并打一行提示**，不会一个一个失败。
+
+第 7 列是 `--prefer-overlap-with-compute`（0/1，省略即 campaign 级的 `PREFER_OVERLAP`，默认
+0）。**它是 cell 的一列而不是一个 campaign 变量**，这样 0/1 两条臂在**每个 rep 内轮换**；分两次
+跑的话 1.5 小时的漂移和效应就分不开了（§8 规矩 2）。两种取值都会写进文件名
+（`_ovlp0` / `_ovlp1`），`verify_run.sh` 拿名字和日志里实际传的值对一遍。
+
+**`PREFER_OVERLAP` 放进 `EXTRA_ENV` 那一列是无效的** —— 它是命令行参数，不是容器 env，
+`-e PREFER_OVERLAP=…` 没有任何东西会读。这个写法现在直接报错退出。也正因为它不是 env，
+`grep` 日志里的 env 查不到它，所以 `run_test_ep.sh` 专门打一行
+`=== PREFER_OVERLAP=<值> ===`。
 
 **`prsmtpp1` 是负控，不是一个变体。** PR #2 在 `EP_MIN_TOKENS_PER_PART=1` 时短路回打补丁
 前的几何，所以那个 cell 是**新 binary 里的旧行为**。它没落回 `official` 臂，就说明差异来自
@@ -494,9 +544,32 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
 手抄的数字能通过所有 review。两个脚本都用 `finditer` 解析：并发 rank 会把两条记录粘在同一
 物理行上，按行 `search` 会静默丢掉一半。
 
+一个 campaign 一个生成器，各自和自己的 `logs/` 放在一起，**后面的 import 前面的**（汇总逻辑
+只有一份）：
+
+| 目录 | 生成 | 轴 |
+|---|---|---|
+| `results/p5en_2n4n_20260825/make_tables.py` | §9.1–9.5、§10.1–10.2 | SM、节点数、env |
+| `results/p5en_3arm_20260831/make_3arm_tables.py` | §9.6–9.7 | 三条臂 × {2N,4N} × {8192,128} × knob |
+| `results/p5en_stack_20260831/make_stack_tables.py` | §9.8 | 四条臂 + 叠加性 |
+| `results/p5en_ovlp_20260831/make_ovlp_tables.py` | §9.9 | `--prefer-overlap-with-compute` |
+
+**本文的表也是手放的，所以也有 checker**：
+
+```bash
+python3 docs/check_runbook_numbers.py     # -> 190 values checked ... 0 MISMATCHES
+```
+
+它把开头那张 PR 表和 §9.7 / §9.8 / §9.9 的每一个数（µs、百分比、knob 名）用上面三个生成器
+从 `logs/` 重新导一遍，并且**按 section 定位到具体那一行**再比 —— grep 一个数字抓不到"粘到
+错误行上"，也抓不到 `logs/` 变了而正文没改。改了小节编号它会带着小节名报错而不是抛栈。
+`p5en_3arm_20260831/check_comparison.py` 同理，管 `comparison.md` 的 139 个断言。
+
+§9.1–9.6 和 §10 还没进 checker（它们是 2026-08-25 那个 campaign 的，另一套 tag 命名）。
+
 ---
 
-## 8. 测量的四条硬规矩
+## 8. 测量的五条硬规矩
 
 1. **每个变体独立 `EP_JIT_CACHE_DIR`** —— 原因和直觉相反。JIT cache key 是
    `name$$compiler$$flags$$code`（`csrc/jit/compiler.hpp:123`），`compiler` 只是 `"NVCC13.1"`，
@@ -517,6 +590,12 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
 4. **报数字要报全 rank，并且带上口径。** rank 之间是系统性不同的，而且差异往往**按节点
    分层**（§9.4：combine 是一整台机器慢 13–17%）。单个 rank、单台机器的区间都不是这一轮的
    数字。同时永远把时间（µs）和带宽（GB/s）一起报，并说明分母 —— 只报 GB/s 曾经把结论弄反过。
+5. **跨臂的差必须同 rep、同 campaign。** campaign 被打断时各臂的 rep 数会不齐（§9.8 就是
+   1 vs 2），此时"每条臂对自己所有 rep 求均值再相减"会把轮间漂移算进臂效应；分母那一条臂也要
+   在同一组 rep 上重算。`make_stack_tables.py` 的跨臂表因此只取**各臂共有的 rep** 并把用了哪
+   几个 rep 打在行里，per-op 表才展示每条臂手上全部的 rep。同理**不同 campaign 的数字不能相
+   减**：叠加性是"差的差"，是最不能跨 campaign 的东西，所以 §9.8 四条臂全部重跑在同一个
+   campaign 里，而不是去引用 §9.6 / §9.7 已有的数。
 
 ---
 
@@ -530,7 +609,12 @@ EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py   # 再出表
 `deep_ep 2.1.0+ec623f3`。16 卡和 32 卡 `test_ep.py` 都 **exit 0、正确性检查全过**。
 
 **§9.1–9.4 的条件**：GIN type 5、`--test-first-only`、未开 `EP_BUFFER_DEBUG`、SM = **24**。
-§9.5 / §9.6 的对照实验在 **12 SM** 上做（要和对照臂对齐），每张表自己标了 SM 数。
+§9.5–9.9 的对照实验在 **12 SM** 上做（要和对照臂对齐），每张表自己标了 SM 数。
+§9.7–9.9 是 2026-08-31 的三个 campaign，各自的日志和生成脚本在
+[`results/p5en_3arm_20260831/`](../results/p5en_3arm_20260831/)、
+[`results/p5en_stack_20260831/`](../results/p5en_stack_20260831/)、
+[`results/p5en_ovlp_20260831/`](../results/p5en_ovlp_20260831/)，每个目录里的 `tables.txt`
+就是那一节表格的机器生成版本（§7）。
 
 **出处**：这些数字的镜像 `BUILD_REF` 是 `ec623f3`，并在 `8e7b42e` 上复核过一遍，8 组配对
 全部落在 **0.7%** 以内（`summary.txt` TABLE 8）。要按本文重建这些表，**显式给 sha**：
@@ -717,13 +801,15 @@ warp 分支里提到外面、删掉恒等 lambda `phys_token_slot`，加注释�
 
 **这一整段差距全部由那两个环境变量解释** —— 不是 QP fan-out、也不是 `--skip-check`：另外
 三个 route-B 变量叠上去毫无增益，`main` 和正式包无法区分。**`--num-sms` 在正式包上不改 QP
-数，是一根纯性能轴**（auto path 是常量 11，`results/.../logs/` 里每份日志都打 `#QPs: 11/11`
-—— 6/12/16/24/32 SM、2 节点和 4 节点全都是 11），所以 SM 可以放心扫。QP flag 在 type 5 之上
+数，是一根纯性能轴**（auto path 是常量 `kDefaultGinContextCnt`，与 SM 数无关：`main` 上是 11，
+`results/p5en_2n4n_20260825/logs/` 里每份日志都打 `#QPs: 11/11` —— 6/12/16/24/32 SM、2 节点和
+4 节点全都是 11；打了 PR #9 之后是 13，见 `results/p5en_3arm_20260831/`，所以这个数要从日志里
+读，不要假定），所以 SM 可以放心扫。QP flag 在 type 5 之上
 对 plain dispatch 是零影响（1502.9 → 1508.5 µs），它真正管的是 **cached dispatch，而且 5 个
 context 更差 9.6%**（1591.0 → 1743.9 µs）；4 节点 decode 上更差 19.3%
 （1003.2 → 1197.0 µs）。**保持默认 11。**
 
-### 9.6 两个待合的 PR：decode dispatch 再减 33%
+### 9.6 dispatch 侧的两个 PR（#1+#2）：decode dispatch 再减 33%
 
 decode 上有两个互相独立的杠杆：GIN 后端（只改 env，§10.1）和 dispatch 的 part 几何
 （两个 PR，§4.2 的第二条臂）。两者**可以叠加**。
@@ -782,22 +868,181 @@ part 一道都没有。
 **取舍**：只关心 prefill 就不用管这两个 PR（2 节点 24 SM 8192 tok：1535.7 vs 1536.0 µs；
 4 节点 12 SM 8192 tok：3955.3 vs 3955.3 µs，都是噪声）。要发 decode / 小 token 的数字就
 自己 cherry-pick 这两个（#1 不改默认值，必须和 #2 叠加才有收益），并且无论如何都要设
-type-5 那一对。合并后 #2 的默认值 15 自动生效，不需要设环境变量。
+type-5 那一对。合并后 #2 的默认值 15 自动生效，不需要设环境变量。**但 decode 的最优点不是这
+两个 PR，是和 §9.7 那两个叠起来（§9.8）。**
 
-### 9.7 b300 现状
+### 9.7 combine 侧的两个 PR（#8+#9）：prefill 层时间 −9.9%
 
-本镜像在 b300 上目前只有抽查（2 节点 16 rank，`--num-tokens 8192`）：dispatch 12 SM
-≈ **1025 µs**、combine 24 SM ≈ **1800 µs**。这是两个不同 SM 档上各一次读数，**不是
-campaign** —— 它只说明这套栈在 b300 上跑通了，不说明 B300 有多快。跑法见 §6，
-`sm103` 的默认 cell 表里留了一个 12 SM 的 prefill cell 用来和这两个点对齐。
+**出处：`results/p5en_3arm_20260831/`（158 份日志，3 个 rep，2 和 4 节点，prefill 和 decode，
+`main` / `#1+#2` / `#8+#9` 三条臂同一个 campaign）**。臂的 `BUILD_REF` 是 `3c737dcf`
+（PR #9 的 head，#8 是它的祖先，所以一个镜像覆盖两个）。
 
-b300 上成体系的数字来自**另一个镜像**（AWS `awsome-distributed-ai#1234` 的 recipe：
-CUDA 13.1.2 / torch 2.11，DeepEP pin 相同），在
-`../adai-ep-comparison-b300/RESULTS_b300.md`，**口径不同，不能和 §9.1–9.6 混排**。那批数字
-里和本文直接相关的两条：PR #2 的 clamp 在 b300 上复现且**更大**（decode dispatch −37.6%，
-p5en 是 −33.5%），但 **PR #1 的 `EP_NUM_SUB_PARTS=1` 在 `sm_103` 上是零到微负**，所以
-§9.6 里"再叠一个 `EP_NUM_SUB_PARTS=1`"是 Hopper 专属；另外 b300 上 clamp 是把 SM 曲线
-**压平**（打了补丁后 12 SM 和 24 SM 打平）而不是移动最优点。
+这个镜像里捆了**四个**改动，本节测的是它们的和：
+
+1. 删掉 `csrc/elastic/buffer.hpp` 里的 `num_channels_per_sm = min(num_channels_per_sm, 4)`
+   clamp —— 12 SM 下 4 → 8 channel/SM，这条臂跑 **96 个 channel**，另两条跑 48。**`#SM`
+   里看不出来。**
+2. `kDefaultGinContextCnt` 11 → 13，即日志里的 `#QPs: 13/13`。
+3. 协作式 forward warp 配对（`kNumFwWarpsPerChannel`、`pair_free_seq` / `pair_half_done_seq`）。
+4. remote-first 两遍扫描调度 —— 这条就是 PR #8 本身。
+
+**2 节点 / 16 rank / 12 SM，全 rank 均值**（`d` 相对 `main`）：
+
+| op | 8192 tok `main` | `#8+#9` | d | 128 tok `main` | `#8+#9` | d |
+|---|---|---|---|---|---|---|
+| dispatch | 1499.8 µs | 1498.4 | −0.1% | 169.6 µs | 123.5 | **−27.2%** |
+| cached dispatch | 1588.8 | 1496.2 | −5.8% | 166.2 | 120.2 | −27.7% |
+| combine | 3587.8 | 3172.5 | −11.6% | 162.5 | 143.6 | −11.6% |
+| reduced combine | 4238.0 | 3670.5 | **−13.4%** | 179.2 | 149.5 | **−16.6%** |
+| **层总时间** | **5737.8** | **5168.8** | **−9.9%** | **348.8** | **273.0** | **−21.7%** |
+
+**4 节点 / 32 rank / 12 SM：**
+
+| op | 8192 tok `main` | `#8+#9` | d | 128 tok `main` | `#8+#9` | d |
+|---|---|---|---|---|---|---|
+| dispatch | 3965.2 µs | 3961.2 | −0.1% | 184.0 µs | 171.0 | −7.1% |
+| cached dispatch | 4254.0 | 3946.2 | −7.2% | 178.9 | 167.6 | −6.4% |
+| reduced combine | 7947.3 | 7773.2 | −2.2% | 253.6 | 237.2 | −6.5% |
+| **层总时间** | **11912.5** | **11734.5** | **−1.5%** | **437.6** | **408.2** | **−6.7%** |
+
+四条结论：
+
+1. **这是 combine 补丁，不是 dispatch 补丁。** prefill dispatch 在两个规模上都是噪声
+   （±0.1%），钱全在 combine 上。decode dispatch 也动了 −27.2%，但那不是它的主业 —— §9.9
+   把这一项拆开了。
+2. **和 §9.6 那两个 PR 管的是不同的 op，所以 2 节点 decode 上 `#8+#9` 赢**：层总时间 273.0
+   vs `#1+#2` 在自己最优点上的 284.8 µs（`EP_NUM_SUB_PARTS=1`：dispatch 106.1 + reduced
+   combine 178.7）。`#1+#2` 的 dispatch 更快，但它的 combine 一点没动。4 节点上两者打平
+   （156.4 + 253.3 = 409.7 vs 408.2 µs）。
+3. **收益随规模缩水，和 §9.6 一样。** 2 节点 → 4 节点：prefill 层总时间 −9.9% → −1.5%
+   （缩 6.6×），decode 层总时间 −21.7% → −6.7%（缩 3.2×），decode dispatch −27.2% → −7.1%
+   （缩 3.8×）。§9.6 那两个 PR 的 decode dispatch 缩得更多（−33.3% → −7.5%，4.5×）。
+   **2 节点的比例一个都不要外推。**
+4. **`#QPs` 要从日志里读。** 这条臂是 `13/13`，另两条是 `11/11`；改动 1 在固定 SM 下改
+   channel 数，`#SM` 和 `#QPs` 都看不出来 —— 那个只有 §9.9 的 flag 能碰。
+
+`EP_NUM_SUB_PARTS` 在这条臂上是**静默无效的**（PR #1 的转发不在它的树里），所以本节的
+`#8+#9` 一律是它自己的默认几何；三条臂在那个 knob 上的负控见 `tables.txt` 的
+`EP_NUM_SUB_PARTS=1` 段（`main` +0.1%、`#8+#9` −0.5%，都落在噪声里）。
+
+### 9.8 四个 PR 叠加：2 节点 decode 层时间 −26.9%
+
+**出处：`results/p5en_stack_20260831/`（四条臂同一个 campaign，2 节点，12 SM，type 5，
+ovlp=0；节点被释放导致 30 个 cell 只跑了 15 个，所以各臂 rep 数不齐 —— 跨臂表按 §8 规矩 5
+只取共有 rep，`tables.txt` 每行都打出用了哪几个 rep）**。叠加镜像的建法见 §4.2。
+
+**128 tok，各臂在自己会部署的操作点上：**
+
+| 臂 | knob | dispatch | reduced combine | 层总时间 | d |
+|---|---|---|---|---|---|
+| `main` | 默认 | 170.3 µs | 180.5 | 350.8 | |
+| `#1+#2` | `EP_NUM_SUB_PARTS=1` | 107.1 | 180.4 | 287.5 | −18.1% |
+| `#8+#9` | 默认 | 123.7 | 150.6 | 274.3 | −21.8% |
+| **叠加** | `EP_NUM_SUB_PARTS=1` | **105.4** | 150.8 | **256.2** | **−26.9%** |
+
+**叠加性**（`expected = main + (#1+#2 − main) + (#8+#9 − main)`，即两份收益直接相加；
+`residual = 实测叠加 − expected`，> 0 表示两者打的是同一笔开销）：
+
+| op | main | `#1+#2` | `#8+#9` | expected | 实测叠加 | residual |
+|---|---|---|---|---|---|---|
+| dispatch | 170.0 µs | 114.1 | 122.3 | 66.4 | 113.9 | **+47.5**（较大单项收益的 85%） |
+| reduced combine | 180.4 | 180.6 | 150.7 | 150.9 | 150.6 | **−0.3**（完全可加） |
+| 层总时间 | 350.4 | 294.7 | 273.1 | 217.3 | 264.5 | +47.2（61%） |
+
+**"各取其优"，不是求和。** combine 上残差 −0.3 µs —— `#1+#2` 在那儿本来就是 0，所以叠加拿到
+的就是 `#8+#9` 的 combine。dispatch 上残差 +47.5 µs = 较大单项收益的 85%，两组 PR 打的是**同
+一笔** dispatch 开销，叠加的 dispatch 基本就是 `#1+#2` 的（113.9 vs 114.1 µs）。所以叠加相对
+两条单臂的净增益是 −10.9%（对 `#1+#2` 的 287.5）和 −6.6%（对 `#8+#9` 的 274.3）—— 它确实是
+p5en 上测到的**最好的 decode 点**，而且 `EP_NUM_SUB_PARTS=1` 在 dispatch 上那 8.5 µs
+（113.9 → 105.4）只有叠加臂还能拿到：那个 env 要 #1 的转发才进 JIT，而 `#8+#9` 自己的树里
+没有它。
+
+**prefill 8192 tok 完全是 `#8+#9` 的**：层总时间 5800.7 → 5195.9（`#8+#9`）→ 5198.8（叠加），
+即 −10.4% 且叠加不再加分，全部来自 reduced combine（4297.1 → 3691.9），dispatch 持平
+（1503.6 → 1506.0）。prefill 的叠加性表**算不出来** —— `#1+#2` 的两个 8192 cell 为省机时砍掉了
+（§11 第 9 条）。
+
+### 9.9 `--prefer-overlap-with-compute` 把 #8+#9 拆成两半
+
+**出处：`results/p5en_ovlp_20260831/`（24 个 cell 全 rc 0、16/16 rank、无 outlier，轮间散布
+0.1–0.3%）**。§9.7 那四个改动里，**改动 1（channel clamp）和 3（warp 配对）是
+`not prefer_overlap_with_compute` 门控的**，改动 2（QP 11→13）和 4（remote-first）不是。所以
+在 `=1` 上做一次 `main` vs `#8+#9` 就把后两个单独量出来了 —— **不用重新 build**。
+
+| op | `main` ovlp0 | `#8+#9` ovlp0 | `main` ovlp1 | `#8+#9` ovlp1 |
+|---|---|---|---|---|
+| 128 dispatch | 169.7 µs | 123.9（−27.0%） | 150.4 | 116.6（−22.5%） |
+| 128 reduced combine | 180.5 | 151.0（−16.3%） | 173.0 | 149.2（−13.8%） |
+| 8192 dispatch | 1505.2 | 1507.5（+0.2%） | 1571.8 | 1572.9（+0.1%） |
+| 8192 reduced combine | 4277.9 | 3715.7（−13.1%） | 3607.4 | 3415.2（−5.3%） |
+
+**这个划分是按 op 变的，这才是结论：**
+
+- **decode dispatch**：45.8 µs 的收益里**无门控的两个占 74%**（33.8 µs），channel clamp +
+  warp 配对只占 26%（12.0 µs）。
+- **prefill reduced combine**：562.2 µs 的收益里**被门控的两个占 66%**（370.1 µs）。
+- **prefill dispatch** 在两个取值上都是平的（±0.2%，即轮间散布），没有东西可归因。
+
+**这是一个 bracket，不是归因。** `=1` 同时改掉了 double-buffering 和 warp 数，所以 `=1` 和
+`=0` 是**两种不同的配置**：只能在同一个取值内部比较两条臂，永远不能把两个取值的数汇总。
+要干净的归因得 build 一个把那两个门控 hunk revert 掉的镜像（§11 第 10 条）。
+
+**顺带：这个 flag 本身是一根性能轴**（同一条臂内翻转，`test_ep.py` **不发任何并发 compute**，
+所以这是纯通信开销，**不能**由此推断 overlap 之后的端到端吞吐）：`main` 的层总时间 prefill
+5783.1 → 5179.2 µs（−10.4%）、decode 350.2 → 323.4（−7.6%）；`#8+#9` 再各多 −4.5% / −3.3%。
+prefill 里它是一笔交换 —— dispatch +4.4%（1505.2 → 1571.8）换 reduced combine −15.7%
+（4277.9 → 3607.4）。**本文其它所有数字都是 `=0`**，也就是这套栈的出厂配置。
+
+### 9.10 b300：叠加臂 2 节点 decode 层时间 −37.5%
+
+**出处：`results/b300_stack_20260903/`（四条臂同一个 campaign，2 × p6-b300.48xlarge，
+ap-northeast-2，2 节点 16 rank，12 SM，type 5，ovlp=0，FP8 dispatch @ alignment 128；
+13 个 cell × 3 轮 **39/39 rc 0**，每个 cell 都是两台机器合池 16/16 rank，无 outlier，
+轮间散布 **≤0.5%**）**。宿主是 installer **1.50.0** / `efa.ko` **3.3.0**（出厂是 1.49.0，
+用 `prepare_host_efa150.sh` 升的，**不用重启**，升完 16 张 NIC 全 `CE OK`）。出表脚本是
+p5en 那个生成器上的 20 行 driver，两批 campaign 共用同一套聚合口径，所以臂名相同的行可以
+逐格对比。
+
+**本表所有行都在默认 part geometry 上**（层总时间 = dispatch + reduced combine），一个 knob
+覆盖整张表，行与行之间保持可比。全表只有一格默认不是最优：`#1+#2` 的 prefill 开
+`EP_NUM_SUB_PARTS=1` 是 4823.6 µs（−0.9%），那根轴见下面第 4 点：
+
+| 臂 | decode dispatch | decode 层 | prefill dispatch | prefill 层 |
+|---|---|---|---|---|
+| `main` `54fffef` | 277.5 µs | 458.1 | 1056.2 µs | 4867.4 |
+| `#1+#2` `bfbdd15` | 127.8（**−53.9%**） | 308.3（−32.7%） | 1054.9（−0.1%） | 4859.5（−0.2%） |
+| `#8+#9` `3c737dc` | 209.7（−24.4%） | 378.4（−17.4%） | 947.6（**−10.3%**） | 4497.5（−7.6%） |
+| **叠加** `a35285f` | **118.1（−57.4%）** | **286.4（−37.5%）** | 947.8（−10.3%） | **4493.5（−7.7%）** |
+
+**和 §9.8 那批 p5en 数字有四处不同，四处都是机器形状，不是噪声：**
+
+1. **`#1+#2` 在 b300 上值双倍** —— decode dispatch −53.9%，p5en 同一格（同样默认 knob）是
+   170.3 → 113.8 µs（−33.2%）。原因在 `main` 那一列：b300 未打补丁的 decode dispatch
+   **绝对时间比 p5en 慢 1.63×**（277.5 vs 170.3 µs）而线速是 2 倍，这段惩罚正好是这组 PR
+   拆掉的东西。上完叠加两台机器并轨 —— 118.1 vs 113.9 µs。
+2. **`#8+#9` 的 combine 收益腰斩** —— decode reduced combine −6.6%（180.6 → 168.7），p5en 是
+   −16.6%；prefill reduced combine −6.9%（3811.2 → 3549.8），p5en 是 −14.1%。b300 的 combine
+   本来就没吃到翻倍的线速（3811.2 vs 4297.1 µs 只快 1.13×，不是 2×），可拿回的余量本就少。
+3. **`#8+#9` 多出一份 p5en 上不存在的 prefill *dispatch* 收益** —— 1056.2 → 947.6 µs
+   （−10.3%），p5en 同一格是 +0.0%（1503.6 → 1504.1）。所以 b300 的 prefill 收益在 dispatch
+   侧，p5en 的全在 combine 侧。
+4. **`EP_NUM_SUB_PARTS=1` 在 b300 decode 上是零，在 prefill 上的符号取决于有没有 `#8+#9`。**
+   decode 上它基本不动（叠加臂 dispatch 118.7 vs 118.1 µs，`#1+#2` 127.7 vs 127.8；p5en 上
+   还值 8.5 µs）。prefill dispatch 上它**帮** `#1+#2` 单臂（1016.0 vs 1054.9 µs，−39.0），却
+   **让叠加臂多花 +102 µs**（1050.1 vs 947.8），把 `#8+#9` 的 dispatch 收益吃掉大半。所以在
+   你真正会部署的那条臂上，**prefill 实例不要开这个 env** —— §9.6 里"再叠一个
+   `EP_NUM_SUB_PARTS=1`"是 Hopper 专属。
+
+**叠加性**（口径同 §9.8）：decode dispatch residual **+58.1 µs = 较大单项收益的 39%**，也就是
+两组 PR 在 b300 上重叠得比 p5en（85%）少得多、更接近直接相加；decode combine residual 是
+−0.3 µs，完全可加。阴性对照 `main` + `EP_NUM_SUB_PARTS=1` 的 decode dispatch 只动了
+**+0.5%**（278.9 vs 277.5 µs）—— 这个 env 要 #1 的转发才进 JIT，`main` 的镜像里读不到它，
+本该如此。
+
+b300 上还有一批**另一个镜像**的旧 campaign（AWS `awsome-distributed-ai#1234` 的 recipe：
+CUDA 13.1.2 / torch 2.11，DeepEP pin 相同），在 `../adai-ep-comparison-b300/RESULTS_b300.md`。
+重叠的地方方向一致（clamp 在 b300 上更大、`EP_NUM_SUB_PARTS=1` 在那儿也是中性），但**口径
+不同，不能和上表混排**。
 
 ---
 
@@ -887,6 +1132,8 @@ GDAKI 没实现。type 2 还在候选列表里时 NCCL 静默回退到它 ——
 - **打了 §9.6 那两个 PR 之后，2 节点 decode 反而 12 SM 更好**（112.7 vs 145.3 µs）；
   4 节点两档在 dispatch + reduced combine 上打平（422.4 vs 422.2 µs）。所以
   `run_campaign.sh` 的 `prs` 臂默认跑 12 SM。
+- **这张表也别搬到 `#8+#9` / 叠加臂上**（§11 第 11 条）：那条臂删掉了 channel clamp，12 SM
+  下跑 **96 个 channel** 而不是 48，等于已经在 SM 之外先动了一次并行度。SM 轴在它上面没扫过。
 - **这张表别搬到 b300**：SM 轴在本镜像的 `sm_103` 上还没扫过（§11 第 8 条）。另一个镜像上的
   观测是 clamp 把 b300 的 SM 曲线压平而不是移动最优点，形状和 p5en 不同。所以 b300 的默认
   cell 表和 p5en 完全一样（工作点 12 SM，24 SM 作为轴），不是因为量过，而是因为两边取不同
@@ -922,7 +1169,8 @@ launcher / driver 侧（不是容器内变量）：
 | `TEST_FIRST_ONLY` | `1` | `--test-first-only` = FP8 dispatch @ `expert_alignment=128`（`enumerate_ep_modes()` 第一项）。设 `0` 是跑整个模式笛卡尔积，几小时 |
 | `EXTRA_ENV` | `"NAME=VALUE …"` | 一次性 env 钩子，用来做单变量 A/B。同名变量会**顶掉** `GIN_ENV` 的默认值（脚本显式丢弃重复项并打一行提示，不依赖 docker 怎么处理重复的 `-e`） |
 | `NODES` | `"<leader> <worker>"` | `run_campaign.sh` 的节点列表（ssh 别名或 IP），顺序即 node rank |
-| `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-bfbdd15` | 两条臂的镜像 tag；`IMAGE_PRS` 不存在时那几个 cell 整条跳过 |
+| `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-bfbdd15` | 两条臂的镜像 tag；`IMAGE_PRS` 不存在时那几个 cell 整条跳过。§9.7 / §9.8 那两条臂靠 `CELLS` 里显式写 tag（§4.2） |
+| `PREFER_OVERLAP` | `0` | `--prefer-overlap-with-compute` 的值。**是命令行参数不是容器 env**，放进 `EXTRA_ENV` 会直接报错。它不是装饰性开关：`=1` 会编掉 PR #9 的两个 hunk，也会改 double-buffering 和 warp 数（§9.9），所以 0 和 1 是两种配置、永不汇总，两种取值都写进文件名 `_ovlp0` / `_ovlp1` |
 | `GIN_ENV` | 那对 GIN 变量（**两个脚本共同的默认值**） | 置空即 type-2 对照臂，tag 相应写 `_type2`。`run_campaign.sh` 按 `GIN_ENV` 透传而不折进 `EXTRA_ENV`，否则置空会被子脚本的默认值改回 type 5 而 tag 仍写 `_type2` |
 | `REPS` / `CELLS` / `PORT_BASE` / `LOGDIR` | `3` / arch 默认表 / `8500` / `~/epruns` | `CELLS` 一行一个 cell |
 
@@ -952,9 +1200,22 @@ launcher / driver 侧（不是容器内变量）：
    因为这个选择被美化 —— 但它仍然是一根没测的轴。
 7. **`--ignore-local-traffic` 的精确校验**：`wire% = SO × (N−1)/N ÷ 每 GPU 线速` 只在
    **2 节点**上对着实测核过一次，4 节点的 ×0.75 至今是纯算术。
-8. **本镜像在 `sm_103` 上的正式 campaign**（§9.7）。build 和 launcher 都已支持 b300，剩下的
-   就是每台机器 `./build_image.sh`（要 `prs` 臂就跑两次）然后
-   `NODES="<leader> <worker>" ./run_campaign.sh`。
+8. **b300 上的 `--num-sms` 轴**（一次 SM 扫描，四条臂 × 3 轮，每个 SM 档约 1.6 h）。§9.10 的
+   campaign 只有 12 SM，为的是和 §9.8 的 p5en campaign 逐格对齐。旧的那批不同镜像的 b300 数
+   说 clamp 在那儿是把 SM 曲线**压平**（打补丁后 12 SM 和 24 SM 打平）而不是移动最优点，所以
+   12 SM 作为默认站得住 —— 但在**本镜像**上这根轴在 b300 没测过，而 auto 检出的值偏低
+   （§9.10 出处那台机器上 `get_rdma_gbs` 只看到一张卡的 50 GB/s，实际每 GPU 100 GB/s）。
+9. **prefill 的叠加性算不出来**（2 个 cell × 3 rep，约 20 分钟）：§9.8 的 campaign 里
+   `#1+#2` 的 8192 tok 两个 cell 为省机时砍掉了，所以 prefill 只有"叠加 = `#8+#9`"这个观测，
+   没有残差。补齐只需要 `pr12bfbdd15|<image>|8192|12|{qpdefault,subparts1}` 两行。
+10. **`#8+#9` 的干净归因**（要 build 一个镜像，不是加跑一次）。§9.9 只给了 bracket：
+    `--prefer-overlap-with-compute=1` 同时改掉 double-buffering 和 warp 数，所以 `=1` 和 `=0`
+    是两种配置。把那两个门控 hunk（channel clamp 删除、forward warp 配对）revert 掉建一个
+    镜像，才能在 `=0` 这一种配置里把四个改动分开。
+11. **`#8+#9` 和叠加臂的 SM 轴没扫过**（§10.2 的表是 `main` 和 `#1+#2` 的）。`#8+#9` 在 12 SM
+    下跑 96 个 channel 而不是 48，所以 24 SM 对它意味着什么，不能从 `main` 的曲线推。
+12. **倾斜负载没测**（`--unbalanced-ratio` / `--masked-ratio`）。PR #8 的 remote-first 调度正是
+    为不均衡设计的，而本文全部是均衡 token 分布 —— 也就是这个改动最不该发光的地方。
 
 ---
 
@@ -970,7 +1231,8 @@ launcher / driver 侧（不是容器内变量）：
 | b300 算出来的"线速占比"约 200% | 分母用了 p5en 的 50 GB/s；b300 每 GPU 两张 EFA = 100 GB/s | 换分母（§9.0 口径） |
 | `num_sms` 自动探测偏小（b300 上 `rdma_gbs=50.0`） | `get_rdma_gbs` 只返回**一块**网卡的速率 | 显式给 `--num-sms`（§5.2） |
 | `ZeroDivisionError` in `get_theoretical_num_sms` / `Failed to get RDMA connection speed:` | 旧 DeepEP tree 上 `--num-sms 0` 走 `ibstat` 自动探测，而 `ibstat` 走 libibumad，EFA 没有 `ib_umad`。当前 pin 先读 sysfs，不会崩 | 显式给 `--num-sms`；单机不触发，只在上多机那一刻出现 |
-| 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题（`#QPs` 恒为 11、与 SM 无关，6/12/16/24/32 SM 全部跑通） | 先查上一轮有没有漏进程：`nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§8 规矩 3） |
+| 改了 `--num-sms` 后整轮**无输出挂死** | 不是 QP 数的问题（`#QPs` 与 SM 无关：`main` / `#1+#2` 上恒为 11、`#8+#9` 上恒为 13，6/12/16/24/32 SM 全部跑通） | 先查上一轮有没有漏进程：`nvidia-smi` 确认显存全 0 MiB，每轮换 `MASTER_PORT`（§8 规矩 3） |
+| GIN init 报 `ENOMEM` / `Cannot allocate memory`，而 `nvidia-smi` 显示显存**够用** | 同一张 EFA 网卡上已经有一个常驻的 DeepEP v2 进程 —— GDAKI 的 context 不能跨进程共享，**空闲显存和这件事无关** | 先确认没有别人的容器在跑（`docker ps` + `nvidia-smi --query-compute-apps`），等它退出再跑；不要靠加显存或减 SM 绕 |
 | 延迟虚高 ~2× 但 `rc=0`、输出完整 | 上一轮泄漏的 rank 在抢显存 | `rc` 查不出来，必须查 `nvidia-smi`（§8 规矩 3） |
 | A/B 完全没有差别 | 两个镜像共享了 JIT cache 目录 —— 实现头文件的内容不进 cache key | 一个镜像一个 `EP_JIT_CACHE_DIR`（§8 规矩 1） |
 | installer 装完，`/sys/module/efa/version` 还是旧版本（例如 3.0.0） | 旧模块当时卸不掉（有进程占着 EFA），installer 结尾打的是 `Please reboot` | 清掉占用进程/容器后重启，再核这一行（§3.1） |

@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""Re-derive the numbers runbook_zh.md's intro table and §9.7-§9.10 quote, from the logs.
+
+usage: python3 docs/check_runbook_numbers.py      # -> N values checked, 0 MISMATCHES
+
+Those sections are hand-written Markdown, and hand-transcribed benchmark numbers have
+survived review in this repo before. A document-wide grep for a value is not enough: it
+cannot tell a number pasted into the neighbouring row from a correct one, and it cannot
+notice `results/*/logs/` changing while the prose stays put. So every claim here is
+(section, which row, which values), the values are recomputed from the per-node logs
+through the SAME generator that produced that campaign's tables.txt, and the row that is
+supposed to carry them must actually carry them.
+
+Four campaigns, four generators (each imports the first one's aggregation: all-rank
+pooling from every node's log, mean over rotated reps, >25%-off-median reps excluded):
+
+  results/p5en_3arm_20260831/   make_3arm_tables.py    -> §9.7
+  results/p5en_stack_20260831/  make_stack_tables.py   -> §9.8 + the intro PR table
+  results/p5en_ovlp_20260831/   make_ovlp_tables.py    -> §9.9
+  results/b300_stack_20260903/  make_stack_tables.py   -> §9.10
+
+§9.10 is the same four arms as §9.8 on b300, and its four cross-machine bullets quote a
+p5en number next to every b300 one -- so those claims are checked against BOTH generators
+at once, which is the only way a "b300 is 1.63x slower here" sentence can be verified.
+
+NOT COVERED, and left that way on purpose: §9.1-§9.6 and §10.1-§10.2 come from the
+2026-08-25 campaign under results/p5en_2n4n_20260825/, whose own generator publishes
+comparison.md and is checked by results/p5en_3arm_20260831/check_comparison.py. Adding
+them here means a fifth tag scheme; they are older and already reviewed.
+
+Percentages are recomputed from the RAW means, not from the rounded µs printed in the
+row, which is what tables.txt does -- so e.g. 167.6/178.9 reads -6.4%, not -6.3%.
+Exits nonzero on any mismatch, so this can gate a commit.
+"""
+import importlib.util
+import os
+import re
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+KIT = os.path.dirname(HERE)
+RESULTS = os.path.join(KIT, "results")
+# overridable so the checker itself can be mutation-tested against a perturbed copy --
+# a checker that passes on a doc with a wrong number is worse than none.
+RUNBOOK = os.environ.get("RUNBOOK", os.path.join(HERE, "runbook_zh.md"))
+# The English README carries the same b300 table as §9.10. Two documents quoting one
+# campaign is exactly how a number drifts, so both are checked against the same values.
+README = os.environ.get("README", os.path.join(KIT, "README.md"))
+
+
+def _mod(path, name, env):
+    """Load a generator as its own module object.
+
+    Each generator resolves its log directory at import time from EPRUNS, so three
+    importlib loads give three independent module objects with three log dirs. A plain
+    `import` would not: the second one would reuse the first's already-executed module.
+    """
+    os.environ.update(env)
+    spec = importlib.util.spec_from_file_location(name, path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)           # import-safe: every generator has __main__
+    return m
+
+
+D3 = os.path.join(RESULTS, "p5en_3arm_20260831")
+DS = os.path.join(RESULTS, "p5en_stack_20260831")
+DO = os.path.join(RESULTS, "p5en_ovlp_20260831")
+DB = os.path.join(RESULTS, "b300_stack_20260903")
+
+g3 = _mod(os.path.join(D3, "make_3arm_tables.py"), "gen3",
+          {"EPRUNS": os.path.join(D3, "logs")})
+gs = _mod(os.path.join(DS, "make_stack_tables.py"), "genstack",
+          {"EPRUNS_STACK": os.path.join(DS, "logs")})
+go = _mod(os.path.join(DO, "make_ovlp_tables.py"), "genovlp",
+          {"EPRUNS_OVLP": os.path.join(DO, "logs")})
+# The b300 driver re-executes the p5en stack generator against the b300 logs, so gb.m is
+# a SECOND, independent copy of gs's code with its own EPRUNS and its own CACHE. It must
+# be loaded last and keyed off EPRUNS_B300, never EPRUNS: gs itself writes EPRUNS.
+gb = _mod(os.path.join(DB, "make_stack_tables.py"), "genb300",
+          {"EPRUNS_B300": os.path.join(DB, "logs")}).m
+assert gs.g.EPRUNS != gb.g.EPRUNS, "the two stack generators collapsed onto one log dir"
+
+MAIN, PR12, PR89, STACK = gs.MAIN, gs.PR12, gs.PR89, gs.STACK
+DFLT, SUB1 = gs.DFLT, gs.SUB1
+# same arm labels on both machines, by construction (the stack merge sha is pinned)
+assert (gb.MAIN, gb.PR12, gb.PR89, gb.STACK) == (MAIN, PR12, PR89, STACK)
+
+
+# ---------------------------------------------------------------- formatting
+def N(x, nd=1):
+    return None if x is None else "%.*f" % (nd, x)
+
+
+def P(new, base):
+    """the row's `d` cell: signed percent off base, from raw means"""
+    return None if None in (new, base) else "%+.1f%%" % (100.0 * (new - base) / base)
+
+
+def SHARE(part, whole):
+    return None if None in (part, whole) else "%.0f%%" % (100.0 * part / whole)
+
+
+def RATIO(a, b):
+    return None if None in (a, b) else "%.1f×" % (a / b)
+
+
+# ------------------------------------------------------- §9.7: the 3-arm campaign
+def v3(arm, nodes, tok, op, knob=DFLT):
+    return g3.stat(g3.cell(arm, nodes, tok, knob), op)[0]
+
+
+def l3(arm, nodes, tok, knob=DFLT):
+    d, c = v3(arm, nodes, tok, "dispatch", knob), v3(arm, nodes, tok,
+                                                     "reduced combine", knob)
+    return None if None in (d, c) else d + c
+
+
+# ------------------------------------------------------- §9.8: the stack campaign
+def basis(tok):
+    """The rep set every cross-arm row in §9.8 is held to: main's own reps.
+
+    make_stack_tables.best_of() uses main as the denominator, so main's reps at its own
+    best knob set the basis, and each row intersects with it. main is not in TUNABLE, so
+    its only knob is the default -- asserted below rather than assumed.
+    """
+    return {rep for rep, _ in gs.cell(MAIN, tok, DFLT)}
+
+
+assert MAIN not in gs.TUNABLE, "main gained a knob: basis() must pick its best one"
+
+
+def best_knob(arm, tok):
+    """The knob §9.8's table would deploy this arm at -- PER TOKEN SIZE.
+
+    Not a per-arm property: the stack's prefill is faster at the DEFAULT geometry and
+    its decode at EP_NUM_SUB_PARTS=1, so carrying one arm's decode knob into its prefill
+    row reads 5289.8 instead of 5198.8. Chosen on the unfiltered layer total, the same
+    way make_stack_tables.best_of() chooses it.
+    """
+    ks = (DFLT, SUB1) if arm in gs.TUNABLE else (DFLT,)
+    opts = [(k, gs.layer(arm, tok, k)) for k in ks]
+    opts = [(k, v) for k, v in opts if v is not None]
+    return min(opts, key=lambda kv: kv[1])[0] if opts else None
+
+
+KNOB_LABEL = {DFLT: "默认", SUB1: "`EP_NUM_SUB_PARTS=1`"}
+
+
+def bo(arm, tok, knob):
+    """(arm's layer total, main's layer total) on the reps the two share -- §9.8's table.
+
+    main is RE-averaged on each row's rep set; carrying one main mean across rows with
+    different reps is exactly the drift the generator's rep filtering exists to stop.
+    """
+    only = basis(tok) & {rep for rep, _ in gs.cell(arm, tok, knob)}
+    return gs.layer(arm, tok, knob, only), gs.layer(MAIN, tok, DFLT, only)
+
+
+def sv(arm, tok, op, knob, only):
+    return gs.us(arm, tok, op, knob, only)
+
+
+# The additivity table is a difference of differences, so it uses the reps ALL FOUR arms
+# share, which is a stricter set than basis().
+ADD = gs.shared_reps(128, lambda _arm: DFLT)
+
+
+def add_row(op):
+    """(main, #1+#2, #8+#9, expected, stack, residual, share of larger single win)"""
+    def val(arm):
+        return (gs.layer(arm, 128, DFLT, ADD) if op == "layer"
+                else sv(arm, 128, op, DFLT, ADD))
+    m, a, b, s = val(MAIN), val(PR12), val(PR89), val(STACK)
+    if None in (m, a, b, s):
+        return (None,) * 7
+    exp = m + (a - m) + (b - m)
+    return m, a, b, exp, s, s - exp, 100.0 * (s - exp) / max(abs(a - m), abs(b - m))
+
+
+# ------------------------------------------------------- §9.9: the overlap campaign
+def vo(arm, tok, ovlp, op):
+    return go.g.stat(go.cell(arm, tok, ovlp), op)[0]
+
+
+def lo(arm, tok, ovlp):
+    d, c = vo(arm, tok, ovlp, "dispatch"), vo(arm, tok, ovlp, "reduced combine")
+    return None if None in (d, c) else d + c
+
+
+# ----------------------------------------------------- §9.10: the b300 stack campaign
+# Every row of §9.10's table is at the DEFAULT geometry -- one knob for the whole table,
+# so the rows stay comparable to each other. The one cell where SUB1 would win (#1+#2's
+# prefill) is quoted in the section's own prose and checked there, at the knob it names.
+def vb(arm, tok, op, knob=DFLT):
+    only = ({rep for rep, _ in gb.cell(MAIN, tok, DFLT)}
+            & {rep for rep, _ in gb.cell(arm, tok, knob)})
+    return gb.us(arm, tok, op, knob, only)
+
+
+def lb(arm, tok, knob=DFLT):
+    d, c = vb(arm, tok, "dispatch", knob), vb(arm, tok, "reduced combine", knob)
+    return None if None in (d, c) else d + c
+
+
+BADD = gb.shared_reps(128, lambda _arm: DFLT)
+
+
+def badd_row(op):
+    """b300 additivity at 128 tok: (residual us, residual as % of the larger win)"""
+    def val(arm):
+        return gb.us(arm, 128, op, DFLT, BADD)
+    m, a, b, s = val(MAIN), val(PR12), val(PR89), val(STACK)
+    if None in (m, a, b, s):
+        return None, None
+    res = s - (m + (a - m) + (b - m))
+    return res, SHARE(res, max(abs(a - m), abs(b - m)))
+
+
+def RATIO2(a, b):
+    """§9.10's cross-machine ratios are quoted to 2 decimals (1.63x, not 1.6x)."""
+    return None if None in (a, b) else "%.2f×" % (a / b)
+
+
+# ---------------------------------------------------------------- the claims
+CLAIMS = []
+
+
+def claim(section, anchor, values, nth=1, span=1):
+    """values must all appear in the `span` lines starting at the `nth` anchor match."""
+    CLAIMS.append((section, anchor, nth, span, values))
+
+
+# --- intro PR table. All four rows are ONE campaign (the stack one), each arm at the
+#     knob §9.8's BEST OPERATING POINT picks for it, so the table is internally
+#     comparable rather than assembled from whichever campaign flattered each arm.
+_m128, _m8192 = bo(MAIN, 128, DFLT)[0], bo(MAIN, 8192, DFLT)[0]
+claim("intro", r"^\| `main` \|", [N(_m128), N(_m8192)])
+for pat, arm, toks in ((r"^\| `#1\+#2`", PR12, (128,)),
+                       (r"^\| `#8\+#9`", PR89, (128, 8192)),
+                       (r"^\| 四个叠加", STACK, (128, 8192))):
+    vals = []
+    for tok in toks:
+        v, base = bo(arm, tok, best_knob(arm, tok))
+        vals += [N(v), P(v, base)]
+    claim("intro", pat, vals)
+
+# --- §9.7: the 2N table, then the 4N table (same row labels, so nth selects which)
+for nth, nodes in ((1, 2), (2, 4)):
+    for op in ("dispatch", "cached dispatch", "combine", "reduced combine"):
+        if nodes == 4 and op == "combine":
+            continue                     # the 4N table prints four rows, not five
+        m8, p8 = v3(MAIN, nodes, 8192, op), v3(PR89, nodes, 8192, op)
+        m1, p1 = v3(MAIN, nodes, 128, op), v3(PR89, nodes, 128, op)
+        claim("9.7", r"^\| %s \|" % re.escape(op),
+              [N(m8), N(p8), P(p8, m8), N(m1), N(p1), P(p1, m1)],
+              nth=1 if op == "combine" else nth)
+    m8, p8 = l3(MAIN, nodes, 8192), l3(PR89, nodes, 8192)
+    m1, p1 = l3(MAIN, nodes, 128), l3(PR89, nodes, 128)
+    claim("9.7", r"^\| \*\*层总时间\*\* \|",
+          [N(m8), N(p8), P(p8, m8), N(m1), N(p1), P(p1, m1)], nth=nth)
+
+# §9.7 conclusion 2: #8+#9 vs #1+#2 at #1+#2's own best knob, 2N then 4N
+claim("9.7", r"所以 2 节点 decode 上",
+      [N(l3(PR89, 2, 128)), N(l3(PR12, 2, 128, SUB1)),
+       N(v3(PR12, 2, 128, "dispatch", SUB1)),
+       N(v3(PR12, 2, 128, "reduced combine", SUB1))], span=3)
+claim("9.7", r"4 节点上两者打平",
+      [N(v3(PR12, 4, 128, "dispatch", SUB1)),
+       N(v3(PR12, 4, 128, "reduced combine", SUB1)),
+       N(l3(PR12, 4, 128, SUB1)), N(l3(PR89, 4, 128))], span=2)
+
+# §9.7 conclusion 3: every ratio is a shrinkage of a percentage, so both are checked
+_sh = []
+for what in ("layer8192", "layer128", "disp128"):
+    if what == "layer8192":
+        a2, b2 = l3(PR89, 2, 8192), l3(MAIN, 2, 8192)
+        a4, b4 = l3(PR89, 4, 8192), l3(MAIN, 4, 8192)
+    elif what == "layer128":
+        a2, b2 = l3(PR89, 2, 128), l3(MAIN, 2, 128)
+        a4, b4 = l3(PR89, 4, 128), l3(MAIN, 4, 128)
+    else:
+        a2, b2 = v3(PR89, 2, 128, "dispatch"), v3(MAIN, 2, 128, "dispatch")
+        a4, b4 = v3(PR89, 4, 128, "dispatch"), v3(MAIN, 4, 128, "dispatch")
+    r2, r4 = 100.0 * (a2 - b2) / b2, 100.0 * (a4 - b4) / b4
+    _sh += [P(a2, b2), P(a4, b4), RATIO(abs(r2), abs(r4))]
+_p2 = v3(PR12, 2, 128, "dispatch"), v3(MAIN, 2, 128, "dispatch")
+_p4 = v3(PR12, 4, 128, "dispatch"), v3(MAIN, 4, 128, "dispatch")
+_sh += [P(*_p2), P(*_p4),
+        RATIO(abs(100.0 * (_p2[0] - _p2[1]) / _p2[1]),
+              abs(100.0 * (_p4[0] - _p4[1]) / _p4[1]))]
+claim("9.7", r"收益随规模缩水", _sh, span=4)
+
+# --- §9.8 best operating point (128 tok)
+for pat, arm in ((r"^\| `main` \|", MAIN), (r"^\| `#1\+#2` \|", PR12),
+                 (r"^\| `#8\+#9` \|", PR89), (r"^\| \*\*叠加\*\* \|", STACK)):
+    knob = best_knob(arm, 128)
+    only = basis(128) & {rep for rep, _ in gs.cell(arm, 128, knob)}
+    v, base = bo(arm, 128, knob)
+    # the knob label is checked like a number: a row naming the wrong geometry is the
+    # same class of error as one quoting the wrong microseconds.
+    vals = [KNOB_LABEL[knob], N(sv(arm, 128, "dispatch", knob, only)),
+            N(sv(arm, 128, "reduced combine", knob, only)), N(v)]
+    if arm != MAIN:
+        vals.append(P(v, base))
+    claim("9.8", pat, vals)
+
+# --- §9.8 additivity
+for op, pat in (("dispatch", r"^\| dispatch \|"),
+                ("reduced combine", r"^\| reduced combine \|"),
+                ("layer", r"^\| 层总时间 \|")):
+    m, a, b, exp, s, res, share = add_row(op)
+    vals = [N(m), N(a), N(b), N(exp), N(s), N(res)]
+    if op != "reduced combine":
+        vals.append(SHARE(res, max(abs(a - m), abs(b - m))))
+    claim("9.8", pat, vals)
+
+# §9.8 prose: "best of each, not the sum", and the env knob only the stack can use
+_d_stack_dflt = sv(STACK, 128, "dispatch", DFLT, ADD)
+_d_stack_sub1 = sv(STACK, 128, "dispatch", SUB1, ADD)
+_stack_bo = bo(STACK, 128, SUB1)[0]
+claim("9.8", r"各取其优",
+      [N(add_row("reduced combine")[5]), N(add_row("dispatch")[5]),
+       SHARE(add_row("dispatch")[5],
+             max(abs(add_row("dispatch")[1] - add_row("dispatch")[0]),
+                 abs(add_row("dispatch")[2] - add_row("dispatch")[0]))),
+       N(_d_stack_dflt), N(sv(PR12, 128, "dispatch", DFLT, ADD)),
+       # each arm at its own published operating point, i.e. the intro table's rows
+       P(_stack_bo, bo(PR12, 128, SUB1)[0]), N(bo(PR12, 128, SUB1)[0]),
+       P(_stack_bo, bo(PR89, 128, DFLT)[0]), N(bo(PR89, 128, DFLT)[0]),
+       N(_d_stack_dflt - _d_stack_sub1), N(_d_stack_sub1)], span=7)
+
+# §9.8 prefill: the stack adds nothing on top of #8+#9
+_pre = basis(8192)
+claim("9.8", r"prefill 8192 tok 完全是",
+      [N(_m8192), N(bo(PR89, 8192, DFLT)[0]), N(bo(STACK, 8192, DFLT)[0]),
+       P(bo(PR89, 8192, DFLT)[0], _m8192),
+       N(sv(MAIN, 8192, "reduced combine", DFLT, _pre)),
+       N(sv(PR89, 8192, "reduced combine", DFLT, _pre)),
+       N(sv(MAIN, 8192, "dispatch", DFLT, _pre)),
+       N(sv(STACK, 8192, "dispatch", DFLT, _pre))], span=4)
+
+# --- §9.9 bracket table: one row per (tok, op), each arm compared only within an ovlp
+for tok in (128, 8192):
+    for op in ("dispatch", "reduced combine"):
+        m0, p0 = vo(MAIN, tok, 0, op), vo(PR89, tok, 0, op)
+        m1, p1 = vo(MAIN, tok, 1, op), vo(PR89, tok, 1, op)
+        claim("9.9", r"^\| %d %s \|" % (tok, re.escape(op)),
+              [N(m0), N(p0), P(p0, m0), N(m1), N(p1), P(p1, m1)])
+
+# §9.9 the split, which is the section's finding
+_d0 = vo(PR89, 128, 0, "dispatch") - vo(MAIN, 128, 0, "dispatch")
+_d1 = vo(PR89, 128, 1, "dispatch") - vo(MAIN, 128, 1, "dispatch")
+claim("9.9", r"decode dispatch\*\*：",
+      [N(-_d0), SHARE(_d1, _d0), N(-_d1), SHARE(_d0 - _d1, _d0), N(_d1 - _d0)], span=2)
+_c0 = vo(PR89, 8192, 0, "reduced combine") - vo(MAIN, 8192, 0, "reduced combine")
+_c1 = vo(PR89, 8192, 1, "reduced combine") - vo(MAIN, 8192, 1, "reduced combine")
+claim("9.9", r"prefill reduced combine\*\*：",
+      [N(-_c0), SHARE(_c0 - _c1, _c0), N(_c1 - _c0)])
+
+# §9.9 the flag read as a configuration (within one arm, never across arms)
+claim("9.9", r"顺带：这个 flag 本身是一根性能轴",
+      [N(lo(MAIN, 8192, 0)), N(lo(MAIN, 8192, 1)),
+       P(lo(MAIN, 8192, 1), lo(MAIN, 8192, 0)),
+       N(lo(MAIN, 128, 0)), N(lo(MAIN, 128, 1)),
+       P(lo(MAIN, 128, 1), lo(MAIN, 128, 0)),
+       P(lo(PR89, 8192, 1), lo(PR89, 8192, 0)),
+       P(lo(PR89, 128, 1), lo(PR89, 128, 0)),
+       P(vo(MAIN, 8192, 1, "dispatch"), vo(MAIN, 8192, 0, "dispatch")),
+       N(vo(MAIN, 8192, 0, "dispatch")), N(vo(MAIN, 8192, 1, "dispatch")),
+       P(vo(MAIN, 8192, 1, "reduced combine"),
+         vo(MAIN, 8192, 0, "reduced combine")),
+       N(vo(MAIN, 8192, 0, "reduced combine")),
+       N(vo(MAIN, 8192, 1, "reduced combine"))], span=5)
+
+# --- §9.10: the b300 table, all four rows at the default geometry
+def sp(arm, tok, op, knob=DFLT):
+    """the p5en counterpart of vb(): same op, same rep basis rule, other machine"""
+    return sv(arm, tok, op, knob, basis(tok) & {rep for rep, _ in gs.cell(arm, tok, knob)})
+
+
+def b300(values, zh, en, span=1, zh_span=None, en_span=None):
+    """One b300 claim, registered against §9.10 AND the README's b300 section.
+
+    Same value list for both, so the two documents cannot disagree about the campaign --
+    which is the failure mode of publishing one campaign in two languages.
+    """
+    claim("9.10", zh, values, span=zh_span or span)
+    claim("README/b300", en, values, span=en_span or span)
+
+
+ROWS = ((MAIN, r"^\| `main` `54fffef` \|", r"^\| `main` \|"),
+        (PR12, r"^\| `#1\+#2` `bfbdd15` \|", r"^\| #1\+#2 \|"),
+        (PR89, r"^\| `#8\+#9` `3c737dc` \|", r"^\| #8\+#9 \|"),
+        (STACK, r"^\| \*\*叠加\*\* `a35285f` \|", r"^\| \*\*stack\*\* \|"))
+for arm, zh, en in ROWS:
+    vals = []
+    for tok in (128, 8192):
+        for get in (lambda a, t: vb(a, t, "dispatch"), lb):
+            v, base = get(arm, tok), get(MAIN, tok)
+            vals.append(N(v))
+            if arm != MAIN:
+                vals.append(P(v, base))
+    b300(vals, zh, en)
+
+# the one cell where the table's single knob is not that arm's optimum -- named in the
+# caveat sentence above the table, so it is checked there too
+b300([N(lb(PR12, 8192, SUB1)), P(lb(PR12, 8192, SUB1), lb(MAIN, 8192))],
+     r"全表只有一格默认不是最优", r"would beat the default is", span=2)
+
+# bullet 1: #1+#2 pays double here, because b300's *unpatched* decode dispatch is the
+# slower one. Both machines' numbers are recomputed, so the 1.63x cannot drift.
+_bd, _pd = vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch")
+b300([P(vb(PR12, 128, "dispatch"), _bd), N(_pd), N(sp(PR12, 128, "dispatch")),
+      P(sp(PR12, 128, "dispatch"), _pd), RATIO2(_bd, _pd), N(_bd),
+      N(vb(STACK, 128, "dispatch")), N(sp(STACK, 128, "dispatch"))],
+     r"在 b300 上值双倍", r"is worth roughly double on b300", zh_span=4, en_span=5)
+
+# bullet 2: the combine win halves, and the reason is in main's own combine
+_brc, _prc = vb(MAIN, 8192, "reduced combine"), sp(MAIN, 8192, "reduced combine")
+b300([P(vb(PR89, 128, "reduced combine"), vb(MAIN, 128, "reduced combine")),
+      N(vb(MAIN, 128, "reduced combine")), N(vb(PR89, 128, "reduced combine")),
+      P(sp(PR89, 128, "reduced combine"), sp(MAIN, 128, "reduced combine")),
+      P(vb(PR89, 8192, "reduced combine"), _brc), N(_brc),
+      N(vb(PR89, 8192, "reduced combine")),
+      P(sp(PR89, 8192, "reduced combine"), _prc), N(_prc), RATIO2(_prc, _brc)],
+     r"的 combine 收益腰斩", r"combine win roughly halves", zh_span=3, en_span=4)
+
+# bullet 3: a prefill dispatch win that the p5en cell does not have
+_bpd, _ppd = vb(MAIN, 8192, "dispatch"), sp(MAIN, 8192, "dispatch")
+b300([N(_bpd), N(vb(PR89, 8192, "dispatch")), P(vb(PR89, 8192, "dispatch"), _bpd),
+      P(sp(PR89, 8192, "dispatch"), _ppd), N(_ppd), N(sp(PR89, 8192, "dispatch"))],
+     r"上不存在的 prefill", r"win that does not exist on p5en", span=3)
+
+# bullet 4: the knob axis. Its sign flips between #1+#2 alone and the stack, so every one
+# of the cells it is claimed from is checked, not just the headline.
+_s_dflt, _s_sub1 = vb(STACK, 8192, "dispatch"), vb(STACK, 8192, "dispatch", SUB1)
+_a_dflt, _a_sub1 = vb(PR12, 8192, "dispatch"), vb(PR12, 8192, "dispatch", SUB1)
+b300([N(vb(STACK, 128, "dispatch", SUB1)), N(vb(STACK, 128, "dispatch")),
+      N(vb(PR12, 128, "dispatch", SUB1)), N(vb(PR12, 128, "dispatch")),
+      N(_d_stack_dflt - _d_stack_sub1),             # what it was worth on p5en
+      N(_a_sub1), N(_a_dflt), N(_a_sub1 - _a_dflt),
+      N(_s_sub1 - _s_dflt, 0), N(_s_sub1), N(_s_dflt)],
+     r"在 b300 decode 上是零", r"buys nothing on b300 decode", zh_span=6, en_span=8)
+
+# additivity + the negative control
+_bres, _bshare = badd_row("dispatch")
+_mc_dflt, _mc_sub1 = vb(MAIN, 128, "dispatch"), vb(MAIN, 128, "dispatch", SUB1)
+b300([N(_bres), _bshare,
+      SHARE(add_row("dispatch")[5],
+            max(abs(add_row("dispatch")[1] - add_row("dispatch")[0]),
+                abs(add_row("dispatch")[2] - add_row("dispatch")[0]))),
+      N(badd_row("reduced combine")[0]),
+      P(_mc_sub1, _mc_dflt), N(_mc_sub1), N(_mc_dflt)],
+     r"^\*\*叠加性\*\*", r"^\*\*Additivity\.\*\*", zh_span=4, en_span=5)
+
+# §9.10's table is only comparable if the whole thing is one knob: assert the doc's own
+# caveat, rather than trusting the prose.
+assert all(gb.cell(a, t, DFLT) for a in (MAIN, PR12, PR89, STACK) for t in (128, 8192)), \
+    "a b300 arm is missing its default-knob cell: the table cannot be one-knob"
+
+
+# ---------------------------------------------------------------- checking
+def _find(lines, pred, what, path):
+    # A renamed section must fail with its own name, not a bare StopIteration:
+    # sections HAVE been renumbered here (the b300 one moved 9.7 -> 9.10).
+    for i, l in enumerate(lines):
+        if pred(l):
+            return i
+    raise SystemExit("check_runbook_numbers.py: cannot find %s in %s -- was the section "
+                     "renamed? update the claims with it." % (what, path))
+
+
+def sections():
+    """key -> (lines of its document, first line, last line).
+
+    intro = everything above §1; 9.x = the heading down to the next one; README/b300 =
+    the README's b300 heading down to its next `## `.
+    """
+    rb = open(RUNBOOK, errors="replace").read().split("\n")
+    out = {"intro": (rb, 0, _find(rb, lambda l: l.startswith("## 1."),
+                                  "the `## 1.` heading", RUNBOOK))}
+    for key in ("9.7", "9.8", "9.9", "9.10"):
+        s = _find(rb, lambda l, k=key: l.startswith("### %s " % k), "section %s" % key,
+                  RUNBOOK)
+        e = next((i for i in range(s + 1, len(rb)) if rb[i].startswith("### ")), len(rb))
+        out[key] = (rb, s, e)
+
+    rm = open(README, errors="replace").read().split("\n")
+    s = _find(rm, lambda l: l.startswith("### B300 results"), "the B300 results heading",
+              README)
+    e = next((i for i in range(s + 1, len(rm)) if rm[i].startswith("## ")), len(rm))
+    out["README/b300"] = (rm, s, e)
+    return out
+
+
+def norm(s):
+    """The runbook writes minus as U+2212, the generators as '-'."""
+    return s.replace("−", "-").replace("–", "-")
+
+
+def main():
+    sec = sections()
+    bad = missing = checked = 0
+    for section, anchor, nth, span, values in CLAIMS:
+        lines, lo_, hi_ = sec[section]
+        rx = re.compile(anchor)
+        hits = [i for i in range(lo_, hi_) if rx.search(lines[i])]
+        if len(hits) < nth:
+            print("NO ROW    [%s] %-34s -> %d matches, wanted #%d"
+                  % (section, anchor, len(hits), nth))
+            missing += 1
+            continue
+        at = hits[nth - 1]
+        blob = norm("\n".join(lines[at:at + span]))
+        for v in values:
+            checked += 1
+            if v is None:
+                print("NO DATA   [%s] %-34s -- a cell is missing from logs/"
+                      % (section, anchor))
+                missing += 1
+            elif v not in blob:
+                print("MISMATCH  [%s] %-34s expected %s\n    %s"
+                      % (section, anchor, v, norm(lines[at]).strip()))
+                bad += 1
+    print("%d values checked across %d rows, %d MISMATCHES, %d unresolvable"
+          % (checked, len(CLAIMS), bad, missing))
+    return 1 if (bad or missing) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

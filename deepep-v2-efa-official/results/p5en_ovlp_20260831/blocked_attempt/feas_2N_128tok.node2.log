@@ -1,0 +1,80 @@
+REFUSING TO START: 110794 MiB already in use on the busiest GPU.
+  nvidia-smi --query-compute-apps=pid,used_memory,process_name --format=csv
+Set ALLOW_BUSY_GPU=1 to override.
+=== EP_NIC_NAME=rdmap110s0 (auto, 200 Gb/s) ===
+=== GIN: NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0 ===
+=== IMAGE=deepep-v2-efa-official:sm90-3c737dc  DeepEP=3c737dcf0da5889ba7efd26e05b4808307cc38af ===
++ docker run --rm --init --gpus all --privileged --network=host --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/infiniband --device=/dev/gdrdrv -v /sys/class/infiniband:/sys/class/infiniband:ro -e MASTER_ADDR=172.31.11.137 -e MASTER_PORT=9301 -e WORLD_SIZE=2 -e RANK=1 -e NCCL_DEBUG=WARN -e EP_NIC_NAME=rdmap110s0 -e NCCL_GIN_TYPE=5 -e NCCL_SYM_GIN_KERNELS_ENABLE=0 -e PYTHONUNBUFFERED=1 -e PYTHONFAULTHANDLER=1 deepep-v2-efa-official:sm90-3c737dc bash -lc 'timeout -s ABRT --kill-after=60 1800     python3 -u /opt/DeepEP/tests/elastic/test_ep.py     --num-processes=8 --num-tokens=128     --hidden=7168 --num-topk=8 --num-experts=256     --num-sms=12 --allow-hybrid-mode=1     --prefer-overlap-with-compute=0 --test-first-only      '
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 13.0.2
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+
+[2026-08-31 07:34:39] ip-172-31-4-36:493:493 [4] ncclResult_t nccl_ofi_gin_gdaki_createContext(void*, ncclGinConfig_v13_t*, void**, ncclNetDeviceHandle_v11_t**):900 NCCL WARN NET/OFI gin GDAKI: createContext failed: fi_enable failed: Cannot allocate memory
+
+[2026-08-31 07:34:39] ip-172-31-4-36:493:493 [4] gin/gin_host.cc:440 (ncclGinDevCommSetup) NCCL WARN GIN: DevComm setup failed on all available backends
+W0831 07:34:41.685000 422 torch/multiprocessing/spawn.py:165] Terminating process 489 via signal SIGTERM
+W0831 07:34:41.686000 422 torch/multiprocessing/spawn.py:165] Terminating process 490 via signal SIGTERM
+W0831 07:34:41.687000 422 torch/multiprocessing/spawn.py:165] Terminating process 491 via signal SIGTERM
+W0831 07:34:41.688000 422 torch/multiprocessing/spawn.py:165] Terminating process 492 via signal SIGTERM
+W0831 07:34:41.689000 422 torch/multiprocessing/spawn.py:165] Terminating process 494 via signal SIGTERM
+W0831 07:34:41.689000 422 torch/multiprocessing/spawn.py:165] Terminating process 495 via signal SIGTERM
+W0831 07:34:41.689000 422 torch/multiprocessing/spawn.py:165] Terminating process 496 via signal SIGTERM
+Traceback (most recent call last):
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 636, in <module>
+    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 340, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
+    while not context.join():
+              ^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 211, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 4 terminated with the following error:
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 87, in _wrap
+    fn(i, *args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 547, in test_loop
+    buffer = construct_elastic_buffer()
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 535, in construct_elastic_buffer
+    return deep_ep.ElasticBuffer(group,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/deep_ep-2.1.0+local-py3.12-linux-x86_64.egg/deep_ep/buffers/elastic.py", line 377, in __init__
+    self.runtime = _C.ElasticBuffer(group.rank(), group.size(),
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: NCCL exception (/opt/DeepEP/csrc/kernels/backend/nccl.cu:188): 3 (GIN: DevComm setup failed on all available backends)
+
