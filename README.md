@@ -231,8 +231,13 @@ likewise our own 256-expert run on the same two nodes so the shape matches; at U
 (dispatch 6.5% under, combine 2.0% over, step 1.7% under), so their published row is not
 a luckier machine. **These two rows no longer hold the fastest DeepEP V2 numbers** — the
 released-package arm in the § row below does, on both machines and by 1.44× / 1.70× on
-dispatch; this pair is kept because it is the `bench_kineto` measurement and the only one
-that resolves the two kernels per op separately;
+dispatch; the p5en pair is kept because it is the `bench_kineto` measurement, the only one
+that resolves the two kernels per op separately. **The GDAKI row is not one clock across
+its two machines**: the p5en cells are `bench_kineto` kernel sums as just described, but
+the b300 cells are `test_ep.py`'s `expanded dispatch` and `reduced combine`
+(re-parsed from `results/b300_20260813/b300_tok_64sm_128_rank0.log`: 200.4 and 160.1 µs
+over that node's 8 ranks) — the *same* clock and the *same* combine variant as the § row,
+so on b300, and only on b300, the ‡ and § cells differ in nothing but SM count;
 (3) **UCCL-EP's per-op LL timings are not reproducible on b300**
 — two runs of the identical config gave dispatch 136.12 → 103.15 µs (−24%) and combine
 228.55 → 367.21 µs (+61%) while its own back-to-back dispatch+combine loop was
@@ -249,13 +254,16 @@ spends **zero**. **On p5en the same head-to-head is 1.53× in DeepEP's favour** 
 521.1 µs step, both at 256 experts on the same two nodes) and there we win *both* ops —
 151.6 vs 220.2 dispatch, 189.6 vs 301.0 combine. So the b300 dispatch deficit is specific
 to that arm, not architectural; note though that the b300 arm runs at 55 SM and p5en at
-12, so this is two observations rather than one controlled sweep.
+12, so this is two observations rather than one controlled sweep. At b300's **12** SM the
+same campaign's step is **403.5 µs** (207.0 + 196.4), so held to p5en's SM count the
+DeepEP-vs-UCCL step ratio on b300 is **1.09×**, not 1.22×.
 The old `run_low_latency.sh` UCCL b300 row (277/149 µs) is at 288
 experts with a different launcher and a pre-uccl#950 rev, so it is not like-for-like
 with these and is left as-is.
 
 § **This is the fastest decode we have measured on EFA on either machine, and the three
-⭐ in it are earned on a deliberately unfavourable clock.** It is also the only arm here
+⭐ in it are earned at 12 SM — against a ‡ row that spends 55 on b300 — and on the slower
+of the two combine variants.** It is also the only arm here
 reproducible from a released package. Config, identical on both machines: 2 nodes / 16 ranks, **12 SM**, 256
 experts, 128 tokens, FP8 dispatch (`--test-first-only`), `NCCL_GIN_TYPE=5
 NCCL_SYM_GIN_KERNELS_ENABLE=0`, `--prefer-overlap-with-compute=0`, EFA installer
@@ -266,15 +274,22 @@ NCCL_SYM_GIN_KERNELS_ENABLE=0`, `--prefer-overlap-with-compute=0`, EFA installer
 [#9](https://github.com/amazon-contributing/DeepEP/pull/9) merged (`a35285f`, the same
 tree on both machines). Steps: p5en **256.2 µs**, b300 **286.4 µs**.
 
-*Why the stars stand despite three measurement differences from the ‡ cells.* All three
-differences cost this row time rather than buy it: (a) it is **`test_ep.py`'s own clock,
-not `bench_kineto`** — that clock brackets the op call, so it charges the launch gap that
-a sum of kernel durations does not; (b) the combine column is `test_ep.py`'s **reduced
-combine**, which is the *slower* of the two combine variants (it is the weighted one an
-inference step actually runs — on the same arm plain combine is 143.5 µs on p5en and
-160.2 on b300, i.e. 7.2 and 8.1 µs cheaper); and (c) the SM count is **12 on b300 too**,
-where the ‡ row spends 55. So the row wins each starred cell while being timed
-pessimistically and, on b300, with 4.6× fewer SMs. It loses **B300 Combine** — 168.3 vs
+*Why the stars stand.* **On b300 nothing has to be argued away: the ‡ cells are the same
+`test_ep.py` clock and the same `reduced combine`, so the two rows can be put at matched
+SM.** The 2026-08 campaign has a 12 SM b300 decode point of its own
+(`results/b300_20260813/b300_tok_12sm_128_rank0.log`, `#SM: 12`): **207.0 µs expanded
+dispatch + 196.4 reduced combine = 403.5 µs step**, against this row's **118.8 + 168.3 =
+287.2 µs** ⇒ **−42.6% dispatch, −14.3% combine, −28.8% step at identical SM, clock and op
+variant**. That 12 SM point is one run with only node 0's 8 of 16 ranks on disk, so read
+it as ±2%; the starred 118.1 µs cell is plain `dispatch`, 0.7 µs under this arm's
+`expanded dispatch`. Against the ‡ row's own **55 SM** point the same arm is still
+**−40.7% on dispatch and −20.4% on the step while spending 4.6× fewer SMs**.
+**On p5en two measurement differences do separate the two rows, and both cost this row
+time rather than buy it:** (a) `test_ep.py`'s clock brackets the op call, so it charges
+the launch gap that a sum of kernel durations does not; and (b) `reduced combine` is the
+*slower* of the two combine variants — the weighted one an inference step actually runs,
+where plain combine on this arm is 143.5 µs on p5en and 160.2 on b300, i.e. 7.2 and 8.1 µs
+cheaper. It loses **B300 Combine** — 168.3 vs
 pplx-garden's 149 µs p50 — and that star stays where it is. The p5en cell also sets
 `EP_NUM_SUB_PARTS=1` (worth 8.5 µs there, **inert** on b300: 118.7 vs 118.1 µs).
 
@@ -294,8 +309,9 @@ and [`results/b300_stack_20260903/`](deepep-v2-efa-official/results/b300_stack_2
 
 **B300 highlights**: **DeepEP V2 on the released 1.50.0 package plus the four upstream
 PRs is now the fastest b300 decode dispatch on EFA — 118.1 µs, past pplx-garden's
-140 µs p50 — and its 286.4 µs step edges pplx's 289 µs**, at 12 SM and on the
-pessimistic clock (see §). pplx-garden keeps combine: **149 µs p50** against our
+140 µs p50 — and its 286.4 µs step edges pplx's 289 µs**, at 12 SM. Against the 2026-08
+GDAKI arm measured on the *same* clock at the *same* 12 SM it is **−42.6% on dispatch and
+−28.8% on the step** (§). pplx-garden keeps combine: **149 µs p50** against our
 168.3. UCCL-EP combine drops to
 149 µs (self-report) / 219 µs (pplx-style), again leveraging v3's
 per-NIC headroom. DeepEP V1 LL doesn't track the same way: dispatch

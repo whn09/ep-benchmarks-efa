@@ -488,12 +488,29 @@ if HAVE_TOP:
     # the campaign that owns it. Declared here rather than inlined so that a ratio can
     # never be "verified" against a number this file also made up.
     KINETO_P5EN_D, KINETO_P5EN_C = 151.6, 189.6     # route B, bench_kineto op-level
-    KINETO_B300_D, KINETO_B300_C = 200.4, 160.1     # (deepep-v2-efa-gdaki-b200/)
     PPLX_P5EN, PPLX_B300 = 222.0 + 245.0, 140.0 + 149.0   # pplx-garden p50 steps
     UCCL_P5EN_D, PPLX_P5EN_D = 207.0, 222.0         # the two pre-GDAKI p5en dispatches
+    UCCL_B300_STEP = 439.0                          # UCCL's own b300 dispatch+combine loop
+    # Route B's b300 decode cells are NOT bench_kineto -- they are test_ep.py's `expanded
+    # dispatch` / `reduced combine`, same clock and same op variant as our arm, so the two
+    # rows are directly subtractable once the SM count matches. Re-parsed from
+    # deepep-v2-efa-gdaki-b200/results/b300_20260813/b300_tok_{64,12}sm_128_rank0.log
+    # (`#SM: 55` and `#SM: 12`, that node's 8 of 16 ranks). Constants because that
+    # directory is local-only and gitignored; only OUR side of every ratio is recomputed.
+    # Carried to 3 decimals so a published step is the sum of the MEANS, not of two
+    # rounded cells -- 207.0 + 196.4 would print 403.4 where the run is 403.5.
+    GDAKI_B300_55SM_D, GDAKI_B300_55SM_C = 200.445, 160.085
+    GDAKI_B300_12SM_D, GDAKI_B300_12SM_C = 207.044, 196.414
+    KINETO_B300_D, KINETO_B300_C = GDAKI_B300_55SM_D, GDAKI_B300_55SM_C
+    _g12 = GDAKI_B300_12SM_D + GDAKI_B300_12SM_C
+    _g55 = GDAKI_B300_55SM_D + GDAKI_B300_55SM_C
+    _bed1 = vb(STACK, 128, "expanded dispatch")   # matched op for the 12 SM comparison
 
     claim("top", r"^‡ \*\*The `DeepEP V2` decode row above is obsolete",
-          [RATIO2(KINETO_P5EN_D, _pd1), RATIO2(KINETO_B300_D, _bd1)], span=24)
+          [RATIO2(KINETO_P5EN_D, _pd1), RATIO2(KINETO_B300_D, _bd1),
+           N(GDAKI_B300_55SM_D), N(GDAKI_B300_55SM_C),
+           N(GDAKI_B300_12SM_D), N(GDAKI_B300_12SM_C), N(_g12),
+           RATIO2(UCCL_B300_STEP, _g12)], span=41)
 
     claim("top", r"^§ \*\*This is the fastest decode we have measured",
           [N(sp(STACK, 128, "combine", SUB1)), N(vb(STACK, 128, "combine")),
@@ -508,15 +525,24 @@ if HAVE_TOP:
            P(_pd1, sp(MAIN, 128, "dispatch")), P(_bd1, vb(MAIN, 128, "dispatch")),
            N(sp(MAIN, 128, "dispatch")), N(vb(MAIN, 128, "dispatch")),
            P(_pd1 + _pc1, _pstep0), P(_bd1 + _bc1, _bstep0),
-           RATIO2(vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch"))],
-          span=37)
+           RATIO2(vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch")),
+           # the matched-12 SM b300 comparison against route B
+           N(GDAKI_B300_12SM_D), N(GDAKI_B300_12SM_C), N(_g12),
+           N(_bed1), N(_bed1 + _bc1),
+           P(_bed1, GDAKI_B300_12SM_D), P(_bc1, GDAKI_B300_12SM_C),
+           P(_bed1 + _bc1, _g12),
+           N(_bed1 - _bd1, 1),                       # expanded vs plain dispatch
+           P(_bed1, GDAKI_B300_55SM_D), P(_bed1 + _bc1, _g55)],
+          span=45)
     # the b300 step now leads pplx's, which is the strongest claim in the section: assert
     # the sign here so the prose cannot say "past pplx" off a number that no longer is.
     assert _bd1 + _bc1 < PPLX_B300, "b300 step no longer beats pplx: reword the highlight"
     assert _bc1 > 149.0, "b300 combine now beats pplx too: move that star as well"
 
-    claim("top", r"^\*\*B300 highlights\*\*", [N(_bd1), N(_bd1 + _bc1), N(_bc1)],
-          nth=2, span=5)   # nth=2: the throughput table has a highlights block too
+    claim("top", r"^\*\*B300 highlights\*\*",
+          [N(_bd1), N(_bd1 + _bc1), N(_bc1),
+           P(_bed1, GDAKI_B300_12SM_D), P(_bed1 + _bc1, _g12)],
+          nth=2, span=6)   # nth=2: the throughput table has a highlights block too
     claim("top", r"^\*\*On p5en, UCCL-EP and pplx-garden are tied",
           [N(_pd1), RATIO2(UCCL_P5EN_D, _pd1), RATIO2(PPLX_P5EN_D, _pd1)], span=4)
 
