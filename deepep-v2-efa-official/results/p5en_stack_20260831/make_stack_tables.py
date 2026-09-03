@@ -78,6 +78,25 @@ def us(arm, tok, op, knob=DFLT, only=None):
     return stat(cell(arm, tok, knob, only), op)[0]
 
 
+def so(arm, tok, op, knob=DFLT, only=None):
+    """all-rank-mean SO GB/s -- the statistic the repo-level README's throughput table
+    quotes, so that table can be generated instead of transcribed.
+
+    A separate function from us() on purpose: SO and us are different statistics over the
+    same cell, and each rank's SO is printed by test_ep.py as an INTEGER, so this cannot
+    resolve a sub-1% change in time (p5en prefill dispatch moves +0.2% here and the GB/s
+    does not budge). Time stays the metric; this is for the one table that is in GB/s.
+    Not a wire rate: --ignore-local-traffic is off, so SO counts intra-node destinations.
+    """
+    return stat(cell(arm, tok, knob, only), op, 0)[0]
+
+
+def mb(arm, tok, op, knob=DFLT, only=None):
+    """MB/rank: so()'s byte denominator, so a published GB/s can be checked against it"""
+    v = stat(cell(arm, tok, knob, only), op, 3)[0]
+    return None if v is None else v / 1e6
+
+
 def layer(arm, tok, knob=DFLT, only=None):
     d = us(arm, tok, "dispatch", knob, only)
     c = us(arm, tok, "reduced combine", knob, only)

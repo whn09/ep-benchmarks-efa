@@ -467,38 +467,89 @@ b300([N(_bres), _bshare,
 # four-arm decomposition. Its decode row is the p5en `EP_NUM_SUB_PARTS=1` cell and the
 # b300 default cell, because those are each machine's optimum -- so unlike §9.10 this
 # table is NOT one knob, and each cell is checked at the knob its own footnote names.
+def G(x):
+    """SO GB/s as the repo README prints it: 2 decimals, because the interesting b300
+    dispatch difference (128.90 vs the older 24 SM 125) is smaller than 1 GB/s wide."""
+    return None if x is None else "%.2f" % x
+
+
 if HAVE_TOP:
+    _bc8 = vb(MAIN, 8192, "combine")     # unweighted combine: the op the GB/s table uses
+    _pc8 = sp(MAIN, 8192, "combine")
     _pd1 = sp(STACK, 128, "dispatch", SUB1)
     _pc1 = sp(STACK, 128, "reduced combine", SUB1)
     _bd1, _bc1 = vb(STACK, 128, "dispatch"), vb(STACK, 128, "reduced combine")
-    claim("top", r"^\| DeepEP V2, released EFA 1\.50\.0",
-          [N(_pd1), N(_pc1), N(_bd1), N(_bc1)])
-
     _pstep0 = sp(MAIN, 128, "dispatch") + sp(MAIN, 128, "reduced combine")
     _bstep0 = vb(MAIN, 128, "dispatch") + vb(MAIN, 128, "reduced combine")
-    claim("top", r"^§ \*\*The 2026-09 row is a different clock",
-          [N(_d_stack_dflt - _d_stack_sub1),            # what the knob is worth on p5en
-           N(vb(STACK, 128, "dispatch", SUB1)), N(_bd1),  # and that it is inert on b300
+    claim("top", r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\* \(2026-09\)",
+          [N(_pd1), N(_pc1), N(_bd1), N(_bc1)])
+
+    # Cross-stack ratios: one side is ours and recomputed, the other is a constant from
+    # the campaign that owns it. Declared here rather than inlined so that a ratio can
+    # never be "verified" against a number this file also made up.
+    KINETO_P5EN_D, KINETO_P5EN_C = 151.6, 189.6     # route B, bench_kineto op-level
+    KINETO_B300_D, KINETO_B300_C = 200.4, 160.1     # (deepep-v2-efa-gdaki-b200/)
+    PPLX_P5EN, PPLX_B300 = 222.0 + 245.0, 140.0 + 149.0   # pplx-garden p50 steps
+    UCCL_P5EN_D, PPLX_P5EN_D = 207.0, 222.0         # the two pre-GDAKI p5en dispatches
+
+    claim("top", r"^‡ \*\*The `DeepEP V2` decode row above is obsolete",
+          [RATIO2(KINETO_P5EN_D, _pd1), RATIO2(KINETO_B300_D, _bd1)], span=24)
+
+    claim("top", r"^§ \*\*This is the fastest decode we have measured",
+          [N(sp(STACK, 128, "combine", SUB1)), N(vb(STACK, 128, "combine")),
+           N(_pc1 - sp(STACK, 128, "combine", SUB1)),
+           N(_bc1 - vb(STACK, 128, "combine")),
+           N(_bc1), N(_pd1), N(_pc1), N(_bd1),
+           RATIO2(KINETO_P5EN_D, _pd1), RATIO2(KINETO_B300_D, _bd1),
+           N(_bd1 + _bc1), N(_pd1 + _pc1), RATIO2(PPLX_P5EN, _pd1 + _pc1),
+           N(_d_stack_dflt - _d_stack_sub1),
+           N(vb(STACK, 128, "dispatch", SUB1)),
            N(_pd1 + _pc1), N(_bd1 + _bc1),
            P(_pd1, sp(MAIN, 128, "dispatch")), P(_bd1, vb(MAIN, 128, "dispatch")),
-           N(sp(MAIN, 128, "dispatch")), N(_pd1),
-           N(vb(MAIN, 128, "dispatch")), N(_bd1),
+           N(sp(MAIN, 128, "dispatch")), N(vb(MAIN, 128, "dispatch")),
            P(_pd1 + _pc1, _pstep0), P(_bd1 + _bc1, _bstep0),
-           RATIO2(vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch")).rstrip("×")],
-          span=26)
+           RATIO2(vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch"))],
+          span=37)
+    # the b300 step now leads pplx's, which is the strongest claim in the section: assert
+    # the sign here so the prose cannot say "past pplx" off a number that no longer is.
+    assert _bd1 + _bc1 < PPLX_B300, "b300 step no longer beats pplx: reword the highlight"
+    assert _bc1 > 149.0, "b300 combine now beats pplx too: move that star as well"
 
-    # the throughput table deliberately does NOT carry this campaign; the paragraph that
-    # says so quotes the numbers that would have gone in it, so they are checked too.
-    claim("top", r"^\*\*Why the 2026-09 PR-stack campaign",
-          [N(vb(STACK, 8192, "dispatch")), P(vb(STACK, 8192, "dispatch"), _bpd), N(_bpd),
-           N(vb(STACK, 8192, "reduced combine")),
-           P(vb(STACK, 8192, "reduced combine"), _brc), N(_brc),
-           N(sp(STACK, 8192, "dispatch")), N(_ppd), P(sp(STACK, 8192, "dispatch"), _ppd),
-           P(sp(STACK, 8192, "reduced combine"), _prc), N(_prc),
-           N(sp(STACK, 8192, "reduced combine"))], span=12)
+    claim("top", r"^\*\*B300 highlights\*\*", [N(_bd1), N(_bd1 + _bc1), N(_bc1)],
+          nth=2, span=5)   # nth=2: the throughput table has a highlights block too
+    claim("top", r"^\*\*On p5en, UCCL-EP and pplx-garden are tied",
+          [N(_pd1), RATIO2(UCCL_P5EN_D, _pd1), RATIO2(PPLX_P5EN_D, _pd1)], span=4)
+
+    # --- the throughput table's new row: GB/s AND the us behind it, both generated
+    _tp = [(gs, sp, "p5en"), (gb, vb, "b300")]
+    row = []
+    for gen, vf, _lbl in _tp:
+        for op in ("dispatch", "combine"):
+            only = basis(8192) if gen is gs else None
+            row += [G(gen.so(STACK, 8192, op, DFLT, only)), N(vf(STACK, 8192, op))]
+    claim("top", r"^\| \*\*DeepEP V2, released EFA 1\.50\.0 \+ 4 upstream PRs\*\*, 12 SM",
+          row)
+
+    claim("top", r"^§ \*\*Same campaign, same arm and same denominator",
+          [N(gs.mb(STACK, 8192, "dispatch"), 1), N(gs.mb(STACK, 8192, "combine"), 1),
+           N(gb.mb(STACK, 8192, "combine"), 1)], span=10)
+
+    claim("top", r"^\*\*The one column this row does not win",
+          [N(vb(STACK, 8192, "combine")), P(vb(STACK, 8192, "combine"), _bc8),
+           N(_bc8), N(vb(STACK, 8192, "dispatch")),
+           P(vb(STACK, 8192, "dispatch"), _bpd), N(_bpd),
+           P(sp(STACK, 8192, "dispatch"), _ppd), N(_ppd),
+           N(sp(STACK, 8192, "dispatch")),
+           P(sp(STACK, 8192, "combine"), _pc8), N(_pc8),
+           N(sp(STACK, 8192, "combine")),
+           G(gs.so(MAIN, 8192, "combine", DFLT, basis(8192))),
+           G(gs.so(STACK, 8192, "combine", DFLT, basis(8192)))], span=12)
 
     # the two Recommendations cells that now quote a step
-    claim("top", r"^\| \*\*MoE inference, decode\*\*", [N(_bd1 + _bc1)])
+    claim("top", r"^\| \*\*MoE inference, decode\*\*",
+          [N(_pd1), N(_pc1), N(_pd1 + _pc1), RATIO2(PPLX_P5EN, _pd1 + _pc1),
+           N(_bd1), N(_bc1), N(_bd1 + _bc1)])
+    claim("top", r"^\| \*\*MoE inference, prefill\*\*", [N(vb(STACK, 8192, "dispatch"))])
     claim("top", r"^\| \*\*Very large EP", [N(_pd1 + _pc1), N(_bd1 + _bc1)])
 
 # §9.10's table is only comparable if the whole thing is one knob: assert the doc's own
