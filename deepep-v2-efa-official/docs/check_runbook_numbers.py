@@ -23,6 +23,12 @@ pooling from every node's log, mean over rotated reps, >25%-off-median reps excl
 p5en number next to every b300 one -- so those claims are checked against BOTH generators
 at once, which is the only way a "b300 is 1.63x slower here" sentence can be verified.
 
+Three documents quote these two campaigns, and every claim is registered against all of
+the ones that carry it, from ONE value list: runbook_zh.md (§9.7-§9.10), this kit's
+README (`### B300 results`), and -- when the kit sits inside the repo -- the repo-level
+../README.md, whose decode table takes the p5en `EP_NUM_SUB_PARTS=1` cell and the b300
+default cell as each machine's best-of, so its two cells are checked at DIFFERENT knobs.
+
 NOT COVERED, and left that way on purpose: §9.1-§9.6 and §10.1-§10.2 come from the
 2026-08-25 campaign under results/p5en_2n4n_20260825/, whose own generator publishes
 comparison.md and is checked by results/p5en_3arm_20260831/check_comparison.py. Adding
@@ -46,6 +52,10 @@ RUNBOOK = os.environ.get("RUNBOOK", os.path.join(HERE, "runbook_zh.md"))
 # The English README carries the same b300 table as §9.10. Two documents quoting one
 # campaign is exactly how a number drifts, so both are checked against the same values.
 README = os.environ.get("README", os.path.join(KIT, "README.md"))
+# The repo-level README publishes the same campaign a third time, in its cross-stack
+# tables. It lives outside this kit, so it is checked only when present.
+TOPREADME = os.environ.get("TOPREADME", os.path.join(os.path.dirname(KIT), "README.md"))
+HAVE_TOP = os.path.exists(TOPREADME)
 
 
 def _mod(path, name, env):
@@ -453,6 +463,44 @@ b300([N(_bres), _bshare,
       P(_mc_sub1, _mc_dflt), N(_mc_sub1), N(_mc_dflt)],
      r"^\*\*叠加性\*\*", r"^\*\*Additivity\.\*\*", zh_span=4, en_span=5)
 
+# --- the repo-level README: the same two campaigns, quoted as a best-of instead of a
+# four-arm decomposition. Its decode row is the p5en `EP_NUM_SUB_PARTS=1` cell and the
+# b300 default cell, because those are each machine's optimum -- so unlike §9.10 this
+# table is NOT one knob, and each cell is checked at the knob its own footnote names.
+if HAVE_TOP:
+    _pd1 = sp(STACK, 128, "dispatch", SUB1)
+    _pc1 = sp(STACK, 128, "reduced combine", SUB1)
+    _bd1, _bc1 = vb(STACK, 128, "dispatch"), vb(STACK, 128, "reduced combine")
+    claim("top", r"^\| DeepEP V2, released EFA 1\.50\.0",
+          [N(_pd1), N(_pc1), N(_bd1), N(_bc1)])
+
+    _pstep0 = sp(MAIN, 128, "dispatch") + sp(MAIN, 128, "reduced combine")
+    _bstep0 = vb(MAIN, 128, "dispatch") + vb(MAIN, 128, "reduced combine")
+    claim("top", r"^§ \*\*The 2026-09 row is a different clock",
+          [N(_d_stack_dflt - _d_stack_sub1),            # what the knob is worth on p5en
+           N(vb(STACK, 128, "dispatch", SUB1)), N(_bd1),  # and that it is inert on b300
+           N(_pd1 + _pc1), N(_bd1 + _bc1),
+           P(_pd1, sp(MAIN, 128, "dispatch")), P(_bd1, vb(MAIN, 128, "dispatch")),
+           N(sp(MAIN, 128, "dispatch")), N(_pd1),
+           N(vb(MAIN, 128, "dispatch")), N(_bd1),
+           P(_pd1 + _pc1, _pstep0), P(_bd1 + _bc1, _bstep0),
+           RATIO2(vb(MAIN, 128, "dispatch"), sp(MAIN, 128, "dispatch")).rstrip("×")],
+          span=26)
+
+    # the throughput table deliberately does NOT carry this campaign; the paragraph that
+    # says so quotes the numbers that would have gone in it, so they are checked too.
+    claim("top", r"^\*\*Why the 2026-09 PR-stack campaign",
+          [N(vb(STACK, 8192, "dispatch")), P(vb(STACK, 8192, "dispatch"), _bpd), N(_bpd),
+           N(vb(STACK, 8192, "reduced combine")),
+           P(vb(STACK, 8192, "reduced combine"), _brc), N(_brc),
+           N(sp(STACK, 8192, "dispatch")), N(_ppd), P(sp(STACK, 8192, "dispatch"), _ppd),
+           P(sp(STACK, 8192, "reduced combine"), _prc), N(_prc),
+           N(sp(STACK, 8192, "reduced combine"))], span=12)
+
+    # the two Recommendations cells that now quote a step
+    claim("top", r"^\| \*\*MoE inference, decode\*\*", [N(_bd1 + _bc1)])
+    claim("top", r"^\| \*\*Very large EP", [N(_pd1 + _pc1), N(_bd1 + _bc1)])
+
 # §9.10's table is only comparable if the whole thing is one knob: assert the doc's own
 # caveat, rather than trusting the prose.
 assert all(gb.cell(a, t, DFLT) for a in (MAIN, PR12, PR89, STACK) for t in (128, 8192)), \
@@ -490,6 +538,12 @@ def sections():
               README)
     e = next((i for i in range(s + 1, len(rm)) if rm[i].startswith("## ")), len(rm))
     out["README/b300"] = (rm, s, e)
+
+    if HAVE_TOP:
+        # the whole file: this campaign's numbers are spread over two tables, two
+        # footnotes and the recommendations, and the anchors are unique on their own.
+        rt = open(TOPREADME, errors="replace").read().split("\n")
+        out["top"] = (rt, 0, len(rt))
     return out
 
 

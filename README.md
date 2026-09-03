@@ -137,6 +137,18 @@ methodology and per-row provenance for this table:
 **The UCCL-EP row is a same-stack re-check and reproduces within 5%**
 (4096 tok BF16: 94.42 vs 90.03 dispatch, 56.93 vs 58.99 combine).
 
+**Why the 2026-09 PR-stack campaign is not in this table.** The four upstream PRs
+behind the § row of the decode table were also measured at 8192 tokens, but at **12 SM
+on both machines**, and prefill is where the SM count dominates: on b300 the stack
+reaches **947.8 µs dispatch** at 12 SM (−10.3% against its own unpatched `54fffef`,
+1056.2 µs), already *under* the 978.8 µs this row's 24 SM cell reports, while its
+reduced combine is **3545.7 µs** (−7.0% vs 3811.2) against 1788.1 µs at 24 SM. Pasting
+a 12 SM row here would therefore read as a combine regression that is purely an SM
+artifact, so the cells stay as they are; refreshing them honestly needs one 24 SM stack
+cell, which has not been run. On p5en the same stack is worth **nothing** on prefill
+dispatch (1506.0 vs 1503.6 µs, +0.2%) and −14.1% on reduced combine (4297.1 → 3692.8
+µs) — the prefill dispatch win is b300-only.
+
 **Where 4096 and 8192 each come from** — because it decides what this table can and
 cannot conclude. **4096 is nobody's chosen shape**: it is both benches' argparse
 default (V1 `tests/test_internode.py:374` and V2 `tests/elastic/test_ep.py:577` are
@@ -185,6 +197,7 @@ since its bench defaults differ). Lower = better.
 | DeepEP V2 (`deepep-v2-uccl-style/` decode, CPU-proxy, 2026-05) | 2700 µs | 2100 µs (avg) | 1690 µs | 1700 µs | ~~1925 µs~~ | ~~1700 µs~~ |
 | **DeepEP V2 + EFA GDAKI** (route B, op-level, 2026-08) ‡ | — | — | **151.6 µs** ⭐ | **189.6 µs** ⭐ | 200.4 µs | **160.1 µs** |
 | **UCCL-EP** re-run on the GDAKI stack, same nodes (2026-08) ‡ | — | — | 220.2 µs | 301.0 µs | 103–136 µs | 229–367 µs |
+| DeepEP V2, released EFA 1.50.0 + 4 upstream PRs, `test_ep.py` clock (2026-09) § | — | — | 105.4 µs | 150.8 µs | 118.1 µs | 168.3 µs |
 
 ‡ **The `DeepEP V2` decode row above is obsolete — do not quote it.** GDAKI route B
 is **~10× faster** than the struck-through b300 cells. Read these three rows
@@ -227,6 +240,33 @@ to that arm, not architectural; note though that the b300 arm runs at 55 SM and 
 The old `run_low_latency.sh` UCCL b300 row (277/149 µs) is at 288
 experts with a different launcher and a pre-uccl#950 rev, so it is not like-for-like
 with these and is left as-is.
+
+§ **The 2026-09 row is a different clock, so do not difference it against the cells
+above it** — it is here because it is the fastest DeepEP V2 decode we have measured on
+either machine, and because it is the only arm you can reproduce from a released
+package. Config, identical on both machines: 2 nodes / 16 ranks, **12 SM**, 256
+experts, 128 tokens, FP8 dispatch (`--test-first-only`), `NCCL_GIN_TYPE=5
+NCCL_SYM_GIN_KERNELS_ENABLE=0`, `--prefer-overlap-with-compute=0`, EFA installer
+1.50.0 (`efa.ko` 3.3.0, libfabric 2.6.0, libnccl-ofi 1.21.1), arm = upstream
+`54fffef` + [#1](https://github.com/amazon-contributing/DeepEP/pull/1) +
+[#2](https://github.com/amazon-contributing/DeepEP/pull/2) +
+[#8](https://github.com/amazon-contributing/DeepEP/pull/8) +
+[#9](https://github.com/amazon-contributing/DeepEP/pull/9) merged (`a35285f`, the same
+tree on both machines). Three config differences from the ‡ cells, all of which move the
+number: it is **`test_ep.py`'s own clock, not `bench_kineto`**; the combine column is
+`test_ep.py`'s **reduced combine** (the weighted one an inference step actually runs),
+not the op-level dispatch+epilogue pair; and the SM count is 12 on b300 too, where the
+‡ row runs 55. The p5en cell also sets `EP_NUM_SUB_PARTS=1` (worth 8.5 µs there,
+**inert** on b300: 118.7 vs 118.1 µs). Steps: p5en **256.2 µs**, b300 **286.4 µs**.
+What is safe to read off this row is its *internal* comparison, same clock, same
+nodes, same shape: against unpatched `54fffef` the four PRs are worth **−38.1% p5en /
+−57.4% b300 on decode dispatch** (170.3 → 105.4 and 277.5 → 118.1 µs) and **−27.0% /
+−37.5% on the step**, and the two machines converge to 118.1 vs 105.4 µs even though
+b300's unpatched dispatch is **1.63×** *slower* than p5en's. Not starred: a single-row config
+group has no column winner to mark. Data, generator and the full four-arm decomposition:
+[`deepep-v2-efa-official/results/p5en_stack_20260831/`](deepep-v2-efa-official/results/p5en_stack_20260831/)
+and [`results/b300_stack_20260903/`](deepep-v2-efa-official/results/b300_stack_20260903/),
+`### B300 results` in that kit's README.
 
 **B300 highlights**: pplx-garden hits **140 µs / 149 µs (p50)** — the
 fastest LL on EFA across all generations. UCCL-EP combine drops to
@@ -279,10 +319,10 @@ doubling.
 | Workload | p5.48xlarge | p5en.48xlarge | **p6-b300.48xlarge** |
 |---|---|---|---|
 | **MoE training** (HT all-to-all, large batches) | DeepEP V1 + amazon NVSHMEM | DeepEP V1 + amazon NVSHMEM | **DeepEP V1** (110 GB/s dispatch, 102 GB/s combine) |
-| **MoE inference, decode** (per-token A2A) | pplx-garden | UCCL-EP **or** pplx-garden (≈ tied) | **pplx-garden** (140/149 µs, old stack) **or DeepEP V2 + GDAKI** (360.5 µs step, 0 CPU threads, and it beats UCCL-EP's 439 µs on the same nodes) |
+| **MoE inference, decode** (per-token A2A) | pplx-garden | UCCL-EP **or** pplx-garden (≈ tied) | **pplx-garden** (140/149 µs, old stack) **or DeepEP V2 + GDAKI** (360.5 µs step, 0 CPU threads, and it beats UCCL-EP's 439 µs on the same nodes; **286.4 µs step at 12 SM** from the released 1.50.0 package + the four upstream PRs, on that arm's own clock — see §) |
 | **MoE inference, prefill** (large batches) | DeepEP V1 (HT mode) or pplx-garden | DeepEP V1 (HT mode) or pplx-garden | **DeepEP V2 + GDAKI** (0.98/1.79 ms at **8192** tok, 24 SM) — pplx's 1.7/2.7 ms is at **4096** tok on the old stack, and DeepEP V2 beats UCCL-EP 1.9× at matched 8192/24 SM |
 | **Provider-portable** (also AMD / CX7 / etc) | UCCL-EP | UCCL-EP | UCCL-EP (B300 NIC selection needs uccl#950 — **now merged**, present at rev `dc676e58`; builds natively for sm_103 with `TORCH_CUDA_ARCH_LIST=10.3`) |
-| **Very large EP (>EP128, low SM budget)** | watch DeepEP V2 + ofi-nccl GIN (still maturing) | **DeepEP V2 + EFA GDAKI** (route B; 341 µs decode step, 12 SM) | **DeepEP V2 + EFA GDAKI** (route B; 360.5 µs decode step, 2766.9 µs prefill step @8192 tok) |
+| **Very large EP (>EP128, low SM budget)** | watch DeepEP V2 + ofi-nccl GIN (still maturing) | **DeepEP V2 + EFA GDAKI** (route B; 341 µs decode step, 12 SM — **256.2 µs** with the four upstream PRs, §) | **DeepEP V2 + EFA GDAKI** (route B; 360.5 µs decode step, 2766.9 µs prefill step @8192 tok — **286.4 µs** decode step with the four upstream PRs at 12 SM, §) |
 
 ## Cross-stack hardware sensitivity
 
