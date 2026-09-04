@@ -457,44 +457,80 @@ image; see the Chinese runbook's Appendix B.
 ## A whole campaign in one command
 
 `run_test_ep.sh` is one cell on one node. `run_campaign.sh` drives every node over
-ssh, iterates the cells, and names each log so `results/*/make_tables.py` can pool it.
-Same script on both arches — the arch only selects the default cell list.
+ssh, iterates the cells, and names each log so `results/*/make_*_tables.py` can pool it.
+It is the **only** campaign script — there are no per-campaign wrappers, because a
+campaign is a cell list plus the assertions that make it subtractable from the last
+one, and both belong next to the driver that runs them. Same script on both arches;
+the arch only selects image tags and the default cell list.
 
 ```bash
 # 1. reductive first: the one-node smoke run under § Run. Two minutes, and it
 #    separates "the build is wrong" from "the fabric is wrong" before you spend
 #    an hour of two-node time on the wrong one.
 
-# 2. the campaign (arch probed from the leader; ARCH can also be given positionally)
-NODES="<leader> <worker>" ./run_campaign.sh
+# 2. review the matrix and the image inventory without spending GPU time
+NODES="<leader> <worker>" PRESET=stack DRY=1 ./run_campaign.sh
 
-# 3. pull every node's logs, then check before believing anything
+# 3. the campaign (arch probed from the leader; ARCH can also be given positionally)
+NODES="<leader> <worker>" PRESET=stack ./run_campaign.sh
+
+# 4. pull every node's logs, then check before believing anything
 for n in 1 2; do scp "<node$n>:~/epruns/*.node$n.log" ./logs/; done
 ./verify_run.sh logs/*.log
 EPRUNS=./logs python3 results/p5en_2n4n_20260825/make_tables.py
 ```
 
-Default cells (3 reps, rotated — every cell once per rep, not blocked per arm, so
-drift cannot be read as an arm effect):
+`PRESET` picks the matrix. 3 reps, rotated — every cell once per rep, not blocked per
+arm, so drift cannot be read as an arm effect.
 
-| arch | cells |
-|---|---|
-| `sm90` / `sm103` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `PRESET` | cells per rep | reproduces |
+|---|---|---|
+| `default` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok | 7 — the general-purpose 2-arm list |
+| `stack` | 4 arms (upstream `main`, #1+#2, #8+#9, merged stack) × {8192, 128} tok @ 12 SM, plus `EP_NUM_SUB_PARTS=1` on the arms that read it | 13 — `results/p5en_stack_20260831`, `results/b300_stack_20260903` |
+| `smsweep` | the same 4 arms × {8192, 128} tok at every SM in `SMS` (default 24), default part geometry, plus two 12 SM stack cells as a drift anchor | 10 — `results/b300_sm24_20260903` (`SMS=24 PORT_BASE=8700`) |
 
-Both arches get the **same** list on purpose — a b300-vs-p5en comparison run at different SM
-counts is not a comparison. 12 SM is the operating point (`run_test_ep.sh`'s default), so the
-`prs` arm is measured only there; 24 SM rides along on the `official` arm as an axis.
+Both arches get the **same** `default` list on purpose — a b300-vs-p5en comparison run at
+different SM counts is not a comparison. 12 SM is the operating point (`run_test_ep.sh`'s
+default), so the `prs` arm is measured only there; 24 SM rides along on the `official` arm
+as an axis.
 
-Override with `CELLS="arm|image|tokens|sms|knobtag|extra env"`, one per line. The `prs`
-arm is skipped with a message if its image is absent, rather than failing nine runs one
-at a time.
+`CELLS="arm|image|tokens|sms|knobtag|extra env|prefer_overlap"`, one per line, overrides
+`PRESET` entirely; every check below still runs.
+
+**The knob axis is not a cross product, and that is deliberate.** `EP_NUM_SUB_PARTS=1` is
+read only by the #1+#2 JIT, so in `PRESET=stack` it rides only the arms that contain
+#1+#2 — plus exactly one `main` cell as the no-op control. A `for sm; for tok; for knob;
+for arm` loop would also emit `#8+#9 × subparts1`, a cell that measures nothing.
 
 **`prsmtpp1` is the control, not a variant.** PR #2 short-circuits to the pre-patch
 geometry when `EP_MIN_TOKENS_PER_PART=1`, so that cell is the old behaviour inside the
 *new* binary. If it does not land on the `official` arm, the difference came from the
 build or the environment and not from the clamp.
 
-What the driver enforces, all of it learned the expensive way:
+What the driver checks **before** the first cell, because each of these produces a wrong
+number rather than an error:
+
+- **Every image a cell names is on *every* node**, and the cells whose image is not are
+  dropped once with a reason instead of failing one at a time over the next hour.
+- **`/opt/DeepEP/BUILD_REF` is identical across nodes** for each image. Two nodes running
+  two trees under one arm label is not a failure — it is a plausible-looking number.
+- **`BUILD_REF` matches the sha the tag claims.** A retagged image, or one rebuilt from a
+  branch that moved, is the failure that survives every other check here. The 4-arm
+  presets assert it for `main`/#1+#2/#8+#9, and read the stack arm's label *out of* the
+  image, because the merge sha is made inside the build and cannot be computed from its
+  two parents. `PRESET=smsweep` additionally pins it to `STACK_SHA_EXPECT=a35285f` — a
+  24-vs-12 SM delta taken across two campaigns is only valid on one tree.
+- **`efa.ko >= 3.3.0` whenever `NCCL_GIN_TYPE=5` is asked for.** Without it type 5 falls
+  back to the type-2 CPU proxy while the log name still says `_gin5`. Run
+  `prepare_host_efa150.sh`. Skipped when you asked for type 2 on purpose.
+- **Idle GPUs on every node** (`nvidia-smi --query-compute-apps`).
+
+`DRY=1` prints the resolved matrix, the inventory and an ETA and runs nothing — do that
+while the hosts are still busy, which is exactly when you want to review it. `FORCE=1`
+overrides the last two checks; nothing in a log name records that it was used, so treat
+those numbers as suspect.
+
+And during the run, all of it learned the expensive way:
 
 - **The GIN pair on every cell** (it is `run_test_ep.sh`'s default; the campaign passes
   it through as `GIN_ENV`, never folded into `EXTRA_ENV`, so an empty value cannot come
@@ -1036,7 +1072,7 @@ needs an image rebuild.
 | `Dockerfile` | The image. Pinned DeepEP commit and EFA installer version; arch and CUDA are build args, stamped into the image; apt NCCL removed; `-L` for pip NCCL. |
 | `build_image.sh` | Build wrapper. Probes `compute_cap` → the two build args that must match the GPU; arch-stamped tag; optional `DEEPEP_REF` for a second arm. |
 | `run_test_ep.sh` | One cell on one node. `TOKENS=8192` prefill / `TOKENS=128` decode; preflights a busy GPU, missing devices, and an image built for another arch; auto-detects `EP_NIC_NAME` and `NCCL_IB_HCA`. |
-| `run_campaign.sh` | Multi-node driver: `NODES="<leader> <worker>" ./run_campaign.sh`. Arch-derived cell list, 3 rotated reps, a port per cell, every axis in the log name. |
+| `run_campaign.sh` | The only campaign driver: `NODES="<leader> <worker>" PRESET=stack ./run_campaign.sh`. `PRESET` = `default` \| `stack` \| `smsweep` (or set `CELLS`); preflights images on every node, `BUILD_REF` vs tag and across nodes, `efa.ko >= 3.3.0`, idle GPUs; `DRY=1` to review the matrix. 3 rotated reps, a port per cell, every axis in the log name. |
 | `verify_run.sh` | Acceptance gate on the logs: lost ranks (per file, then pooled per tag), the two b300 blockers, mislabelled tags, type-2 backend, `EP_BUFFER_DEBUG`, a clamped `num_allocated_qps`, missing provenance. `rc=0` from a run proves none of this. |
 | `ce_probe.c` | `ibv_create_comp_cntr` probe over every device — the decisive GDAKI check. `gcc -o ce_probe ce_probe.c -libverbs` |
 | `docs/runbook_zh.md` | Full Chinese runbook: install → build → test, env-var reference, ~30-row troubleshooting table. |

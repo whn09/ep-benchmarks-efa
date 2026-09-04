@@ -467,7 +467,9 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 
 `run_test_ep.sh` 是"一台机器上的一个 cell"；`run_campaign.sh` 是驱动器：它 ssh 到每个节点，
 按矩阵逐个 cell 跑，并把日志命名成 `make_tables.py` 能直接汇总的形式。
-**两种机型同一个脚本**，arch 只决定默认 cell 列表。
+**这个仓库只有这一个 campaign 脚本**，没有一个 campaign 一个 wrapper —— 一个 campaign 就是
+"一张 cell 表 + 让它能和上一次相减的那几条断言"，两样都该和跑它的驱动器放在一起。
+**两种机型同一个脚本**，arch 只决定镜像 tag 和默认 cell 列表。
 
 在**能 ssh 到所有节点**的那台机器上跑它（通常是你的笔记本，因为 `NODES` 用的是你
 `~/.ssh/config` 里的 alias；那台也需要一份 clone，但不需要 GPU、也不建镜像）。它在节点上
@@ -475,23 +477,32 @@ python3 /opt/DeepEP/tests/legacy/test_internode.py    # 旧 NVSHMEM 后端（对
 clone）里的 `run_test_ep.sh`，不会往节点推代码。
 
 ```bash
-# arch 从 leader 探；也可以位置参数显式给 sm90 / sm103
-NODES="<leader> <worker>" ./run_campaign.sh
+# 先 DRY 看矩阵和镜像清单，不花 GPU 时间；arch 从 leader 探，也可以位置参数给 sm90 / sm103
+NODES="<leader> <worker>" PRESET=stack DRY=1 ./run_campaign.sh
+NODES="<leader> <worker>" PRESET=stack ./run_campaign.sh
 ```
 
-默认 cell（3 个 rep，**rep 内轮换**：每个 cell 每个 rep 各跑一次，不是把一条臂跑完再换下一条，
-否则热漂移和集群漂移会被读成臂效应）：
+`PRESET` 选矩阵。3 个 rep，**rep 内轮换**：每个 cell 每个 rep 各跑一次，不是把一条臂跑完再换
+下一条，否则热漂移和集群漂移会被读成臂效应。
 
-| arch | cells |
-|---|---|
-| `sm90` / `sm103` | `official` × {8192, 128} tok × {12, 24} SM；`prs` × {8192, 128} tok @ 12 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok |
+| `PRESET` | cells | 每 rep | 对应 |
+|---|---|---|---|
+| `default` | `official` × {8192, 128} tok × {12, 24} SM；`prs` × {8192, 128} tok @ 12 SM；`prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok | 7 | 通用两臂表，不对应某个已发布 campaign |
+| `stack` | 四条臂（上游 `main`、#1+#2、#8+#9、合并 stack）× {8192, 128} tok @ 12 SM，外加 `EP_NUM_SUB_PARTS=1`（只挂在读它的臂上） | 13 | `results/p5en_stack_20260831`、`results/b300_stack_20260903` |
+| `smsweep` | 同样四条臂 × {8192, 128} tok × `SMS` 里每个 SM 数（默认 24），默认 part 几何，外加两个 12 SM stack cell 作漂移锚 | 10 | `results/b300_sm24_20260903`（`SMS=24 PORT_BASE=8700`） |
 
-两个 arch 用**同一张** cell 表是故意的 —— 两边 SM 数不一样的话，b300 和 p5en 就不可比了。
-**12 SM 是工作点**（`run_test_ep.sh` 的默认），所以 `prs` 臂只在 12 SM 上量；24 SM 只挂在
-`official` 臂上，作为一根轴（取舍见 §10.2）。
+两个 arch 的 `default` 用**同一张** cell 表是故意的 —— 两边 SM 数不一样的话，b300 和 p5en 就
+不可比了。**12 SM 是工作点**（`run_test_ep.sh` 的默认），所以 `prs` 臂只在 12 SM 上量；24 SM
+只挂在 `official` 臂上，作为一根轴（取舍见 §10.2）。
 
-要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env|prefer_overlap"`，一行一个 cell。
-`prs` 臂的镜像（§4.2）不存在时那几个 cell **整条跳过并打一行提示**，不会一个一个失败。
+要改就 `CELLS="arm|image|tokens|sms|knobtag|额外 env|prefer_overlap"`，一行一个 cell，它整条
+盖掉 `PRESET`，下面那些检查照旧全跑。镜像不在**所有**节点上的 cell **一次性整条跳过并打一行
+原因**，不会一个一个失败一小时。
+
+**knob 轴不是笛卡尔积，这是故意的。** `EP_NUM_SUB_PARTS=1` 只有 #1+#2 的 JIT 会读，所以
+`PRESET=stack` 里它只挂在含 #1+#2 的两条臂上，再加**一个** `main` cell 当负控（它动了就说明
+这个 knob 摸到了不该摸的东西）。写成 `for sm; for tok; for knob; for arm` 会顺手生出
+`#8+#9 × subparts1` 这种什么也没量的 cell。
 
 第 7 列是 `--prefer-overlap-with-compute`（0/1，省略即 campaign 级的 `PREFER_OVERLAP`，默认
 0）。**它是 cell 的一列而不是一个 campaign 变量**，这样 0/1 两条臂在**每个 rep 内轮换**；分两次
@@ -507,7 +518,25 @@ NODES="<leader> <worker>" ./run_campaign.sh
 前的几何，所以那个 cell 是**新 binary 里的旧行为**。它没落回 `official` 臂，就说明差异来自
 构建或环境，而不是 clamp。
 
-驱动脚本替你守住的东西，每一条都是踩过的：
+**第一个 cell 之前**驱动脚本先查这几件事 —— 每一件都是"出一个错数字"而不是"报错"：
+
+- **每条 cell 用到的镜像在每个节点上都有**，缺的那些 cell 一次性跳掉并说明原因。
+- **同一个镜像在各节点上的 `/opt/DeepEP/BUILD_REF` 一致**。两台机器跑两棵树、共用一个 arm
+  标签，不是一次失败，而是一个看上去很合理的数字。
+- **`BUILD_REF` 和 tag 声称的 sha 对得上**。retag 过的镜像、或者从一个已经动过的分支重建的
+  镜像，是这里唯一能躲过其他所有检查的坑。四臂 preset 对 `main`/#1+#2/#8+#9 逐个断言；stack
+  臂的标签是**从镜像里读出来的** merge sha（merge 是在构建里做的，算不出来）。
+  `PRESET=smsweep` 还把它钉在 `STACK_SHA_EXPECT=a35285f` 上 —— 跨两个 campaign 相减出来的
+  24-vs-12 SM 差值，只有在同一棵树上才成立。
+- **要 `NCCL_GIN_TYPE=5` 就必须 `efa.ko >= 3.3.0`**（§3）。否则它静默退回 type-2 CPU proxy，
+  而日志名还是写着 `_gin5`。跑 `prepare_host_efa150.sh`。故意量 type 2 时这条不查。
+- **每个节点 GPU 空闲**（`nvidia-smi --query-compute-apps`）。
+
+`DRY=1` 只打矩阵、镜像清单和时间估计，什么都不跑 —— 趁机器还忙着、kmod 还是旧的时候先 review
+矩阵，正是该 review 的时候。`FORCE=1` 可以压掉最后两条检查；**日志名里没有任何东西记录你用过
+它**，所以那一批数字一律当可疑处理。
+
+跑起来之后驱动脚本替你守住的东西，每一条都是踩过的：
 
 - **每个 cell 都带那两个 GIN 变量**（`run_test_ep.sh` 的默认值，campaign 按 `GIN_ENV`
   原样透传），并按有无它在 tag 里写 `_gin5` / `_type2`，`verify_run.sh` 再拿 tag 和日志里的
@@ -1178,7 +1207,10 @@ launcher / driver 侧（不是容器内变量）：
 | `IMAGE_BASE` / `IMAGE_PRS` | `:<arch>` / `:<arch>-bfbdd15` | 两条臂的镜像 tag；`IMAGE_PRS` 不存在时那几个 cell 整条跳过。§9.7 / §9.8 那两条臂靠 `CELLS` 里显式写 tag（§4.2） |
 | `PREFER_OVERLAP` | `0` | `--prefer-overlap-with-compute` 的值。**是命令行参数不是容器 env**，放进 `EXTRA_ENV` 会直接报错。它不是装饰性开关：`=1` 会编掉 PR #9 的两个 hunk，也会改 double-buffering 和 warp 数（§9.9），所以 0 和 1 是两种配置、永不汇总，两种取值都写进文件名 `_ovlp0` / `_ovlp1` |
 | `GIN_ENV` | 那对 GIN 变量（**两个脚本共同的默认值**） | 置空即 type-2 对照臂，tag 相应写 `_type2`。`run_campaign.sh` 按 `GIN_ENV` 透传而不折进 `EXTRA_ENV`，否则置空会被子脚本的默认值改回 type 5 而 tag 仍写 `_type2` |
-| `REPS` / `CELLS` / `PORT_BASE` / `LOGDIR` | `3` / arch 默认表 / `8500` / `~/epruns` | `CELLS` 一行一个 cell |
+| `PRESET` | `default` \| `stack` \| `smsweep` | 选 cell 矩阵（§6）。给了 `CELLS` 就整条盖掉它 |
+| `SMS` / `ANCHOR` / `STACK_SHA_EXPECT` | `24` / `1` / `a35285f` | 只对 `PRESET=smsweep`：扫哪些 SM 数、要不要那两个 12 SM 漂移锚、以及 stack 镜像的 merge sha 必须是哪一个（不一致就拒跑，因为跨 campaign 的 24-vs-12 差值会横跨两棵树） |
+| `DRY` / `FORCE` | 未设 / 未设 | `DRY=1` 只打矩阵和镜像清单；`FORCE=1` 压掉 `efa.ko` 和空闲 GPU 两条检查（日志名不记录，数字一律可疑） |
+| `REPS` / `CELLS` / `PORT_BASE` / `LOGDIR` | `3` / preset 默认表 / `8500` / `~/epruns` | `CELLS` 一行一个 cell |
 
 ---
 

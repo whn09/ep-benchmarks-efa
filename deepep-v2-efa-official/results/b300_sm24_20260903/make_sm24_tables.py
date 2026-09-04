@@ -69,7 +69,7 @@ MAIN, PR12, PR89, STACK = "main54fffef", "pr12bfbdd15", "pr893c737dc", "stacka35
 ARMS = [(MAIN, "main"), (PR12, "PR #1+#2"), (PR89, "PR #8+#9"), (STACK, "stack")]
 TOKS = ((8192, "PREFILL"), (128, "DECODE"))
 # The SM counts this campaign adds, and the one every delta is taken against. Mirrors
-# run_b300_sm24_campaign.sh's SMS env, so `SMS="24 48" ... && SM_LIST="24 48" this.py`
+# run_campaign.sh PRESET=smsweep's SMS env, so `SMS="24 48" ... && SM_LIST="24 48" this.py`
 # needs no edit here. 12 is the anchor because that is what results/b300_stack_20260903
 # and the p5en campaigns ran at.
 SM_NEW = sorted({int(x) for x in os.environ.get("SM_LIST", "24").split()})
