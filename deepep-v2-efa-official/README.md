@@ -319,6 +319,30 @@ on the default backend, inside that arm's across-rep spread (§ Results).
 
 ## Run
 
+### One node, 8 ranks — do this first
+
+~2 minutes, no fabric, no second host. It exercises the whole image — JIT, GIN backend
+selection, and **both b300 blockers below appear here** — while it still cannot fail for a
+cross-node reason, so a failure at this step is the *build*, not the fabric:
+
+```bash
+IMAGE=deepep-v2-efa-official:sm103 WORLD_SIZE=1 NUM_PROCESSES=8 \
+TOKENS=128 NUM_SMS=12 MASTER_PORT=8499 NCCL_DEBUG=INFO \
+  ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
+./verify_run.sh /tmp/smoke.node1.log
+```
+
+`WORLD_SIZE=1` and `127.0.0.1` are the only two things that differ from a real run: the
+node rank stays `0`, and **`WORLD_SIZE` defaults to 2, so single-node has to pass it**.
+Single node is also the one shape that never trips the `ibstat` divide-by-zero further
+down, which is what makes it a clean build test.
+
+It does **not** test cross-node QP setup, GIN type 5 on the wire, or combine's node
+layering — so no number here is quotable. Use it to answer "does this image work at all",
+then go to two nodes for anything you intend to report.
+
+### Two nodes
+
 ```bash
 # worker first, then leader; only NODE_RANK differs
 ssh <worker> "cd ~/work/ep-benchmarks-efa/deepep-v2-efa-official && TOKENS=8192 NUM_SMS=12 bash run_test_ep.sh 1 <leader-ip>" &
@@ -437,12 +461,9 @@ ssh, iterates the cells, and names each log so `results/*/make_tables.py` can po
 Same script on both arches — the arch only selects the default cell list.
 
 ```bash
-# 1. reductive first: one node, 8 ranks. Both b300 blockers appear here, and this
-#    separates "the build is wrong" from "the fabric is wrong" for 2 minutes of cost.
-IMAGE=deepep-v2-efa-official:sm103 WORLD_SIZE=1 NUM_PROCESSES=8 \
-TOKENS=128 NUM_SMS=12 MASTER_PORT=8499 NCCL_DEBUG=INFO \
-  ./run_test_ep.sh 0 127.0.0.1 2>&1 | tee /tmp/smoke.node1.log
-./verify_run.sh /tmp/smoke.node1.log
+# 1. reductive first: the one-node smoke run under § Run. Two minutes, and it
+#    separates "the build is wrong" from "the fabric is wrong" before you spend
+#    an hour of two-node time on the wrong one.
 
 # 2. the campaign (arch probed from the leader; ARCH can also be given positionally)
 NODES="<leader> <worker>" ./run_campaign.sh
