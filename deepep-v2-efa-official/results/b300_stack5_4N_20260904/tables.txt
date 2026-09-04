@@ -1,0 +1,261 @@
+4 x p6-b300.48xlarge (sm_103), EFA 1.50.0 + efa.ko 3.3.0, GIN type 5
+EPRUNS=/Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_stack5_4N_20260904/logs
+NVLS-on reference campaign: /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_scale_20260904/logs
+
+CONFIG -- read out of the logs, not assumed
+
+  arm       BUILD_REF                                  #SM    #QPs     world
+  official  97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   12     11/11    32
+  main      54fffeff810723f574c574b1790dff189f3c6ffb   12     11/11    32
+  PR #1+#2  bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11    32
+  PR #8+#9  3c737dcf0da5889ba7efd26e05b4808307cc38af   12     13/13    32
+  stack     a35285f0af98856625e542df24bd17a985bc05d9   12     13/13    32
+
+  every arm: one BUILD_REF, measured #SM == 12, world == 32.
+
+PREFILL -- 8192 tok, 4 nodes / 32 ranks, 12 SM, GIN type 5, ovlp=0, NVLS off
+  `d vs main` is against main54fffef, the merge base of all four PRs.
+  `d vs off` is against official (97d8f9b, latest upstream main).
+
+  op                 arm               us  d vs main   d vs off SO GB/s      per-rep us
+  -------------------------------------------------------------------------------------
+  dispatch           official      2030.6      -0.1%            108-110      2030.6 / 2030.7
+                     main          2032.4                 +0.1% 108-110      2033.9 / 2030.9
+                     PR #1+#2      2031.1      -0.1%      +0.0% 108-110      2033.2 / 2029.1
+                     PR #8+#9      2018.5      -0.7%      -0.6% 109-110      2019.1 / 2018.0
+                     stack         2017.4      -0.7%      -0.7% 109-110      2016.2 / 2018.5
+
+  expanded dispatch  official      2030.6      +0.1%            108-110      2028.7 / 2032.4
+                     main          2029.4                 -0.1% 109-110      2028.6 / 2030.2
+                     PR #1+#2      2029.7      +0.0%      -0.0% 108-110      2029.4 / 2030.0
+                     PR #8+#9      2017.4      -0.6%      -0.6% 109-110      2017.8 / 2017.1
+                     stack         2018.0      -0.6%      -0.6% 109-110      2017.8 / 2018.1
+
+  cached dispatch    official      2135.8      +0.1%            103-105      2134.3 / 2137.2
+                     main          2133.8                 -0.1% 103-105      2134.3 / 2133.4
+                     PR #1+#2      2132.6      -0.1%      -0.1% 103-105      2132.9 / 2132.4
+                     PR #8+#9      1993.3      -6.6%      -6.7% 111-112      1994.1 / 1992.6
+                     stack         1992.7      -6.6%      -6.7% 111-112      1993.2 / 1992.1
+
+  combine            official      4462.6      -0.9%            78-102       4417.1 / 4508.2
+                     main          4505.1                 +1.0% 78-104       4505.7 / 4504.4
+                     PR #1+#2      4511.5      +0.1%      +1.1% 78-102       4510.9 / 4512.1
+                     PR #8+#9      4204.4      -6.7%      -5.8% 89-109       4200.1 / 4208.7
+                     stack         4176.1      -7.3%      -6.4% 89-109       4179.5 / 4172.7
+
+  reduced combine    official      4884.3      -0.1%            74-93        4891.3 / 4877.3
+                     main          4886.8                 +0.1% 74-93        4891.7 / 4881.9
+                     PR #1+#2      4865.2      -0.4%      -0.4% 74-93        4868.7 / 4861.7
+                     PR #8+#9      4303.8     -11.9%     -11.9% 90-107       4281.9 / 4325.7
+                     stack         4300.2     -12.0%     -12.0% 90-106       4280.8 / 4319.7
+
+  layer total (dispatch + reduced combine):
+                     official      6914.9      -0.1%           
+                     main          6919.2                 +0.1%
+                     PR #1+#2      6896.3      -0.3%      -0.3%
+                     PR #8+#9      6322.3      -8.6%      -8.6%
+                     stack         6317.6      -8.7%      -8.6%
+
+DECODE -- 128 tok, 4 nodes / 32 ranks, 12 SM, GIN type 5, ovlp=0, NVLS off
+  `d vs main` is against main54fffef, the merge base of all four PRs.
+  `d vs off` is against official (97d8f9b, latest upstream main).
+
+  op                 arm               us  d vs main   d vs off SO GB/s      per-rep us
+  -------------------------------------------------------------------------------------
+  dispatch           official       315.7      +0.1%            8-11         314.1 / 317.4
+                     main           315.3                 -0.1% 8-11         314.5 / 316.2
+                     PR #1+#2       182.7     -42.1%     -42.1% 14-19        183.2 / 182.2
+                     PR #8+#9       244.4     -22.5%     -22.6% 11-14        244.7 / 244.1
+                     stack          152.1     -51.8%     -51.8% 17-24        151.8 / 152.4
+
+  expanded dispatch  official       316.9      -0.3%            8-11         316.9 / 317.0
+                     main           317.8                 +0.3% 8-11         318.1 / 317.5
+                     PR #1+#2       182.5     -42.6%     -42.4% 14-19        182.2 / 182.9
+                     PR #8+#9       244.3     -23.1%     -22.9% 11-14        244.5 / 244.2
+                     stack          152.4     -52.0%     -51.9% 17-23        152.2 / 152.6
+
+  cached dispatch    official       320.4      +0.6%            8-11         320.8 / 320.0
+                     main           318.6                 -0.6% 8-11         319.5 / 317.7
+                     PR #1+#2       182.9     -42.6%     -42.9% 14-19        180.9 / 185.0
+                     PR #8+#9       242.3     -24.0%     -24.4% 11-14        241.9 / 242.6
+                     stack          144.4     -54.7%     -54.9% 18-25        145.1 / 143.7
+
+  combine            official       269.9      +0.0%            17-26        269.9 / 269.9
+                     main           269.9                 -0.0% 17-26        270.0 / 269.7
+                     PR #1+#2       270.2      +0.1%      +0.1% 17-26        270.4 / 270.1
+                     PR #8+#9       292.7      +8.4%      +8.4% 16-25        292.0 / 293.4
+                     stack          292.6      +8.4%      +8.4% 16-25        292.3 / 292.8
+
+  reduced combine    official       284.4      +0.0%            16-25        284.0 / 284.8
+                     main           284.3                 -0.0% 16-25        284.6 / 284.0
+                     PR #1+#2       284.0      -0.1%      -0.1% 16-25        283.9 / 284.1
+                     PR #8+#9       297.8      +4.7%      +4.7% 15-24        297.1 / 298.4
+                     stack          297.7      +4.7%      +4.7% 15-24        297.2 / 298.2
+
+  layer total (dispatch + reduced combine):
+                     official       600.1      +0.1%           
+                     main           599.6                 -0.1%
+                     PR #1+#2       466.7     -22.2%     -22.2%
+                     PR #8+#9       542.2      -9.6%      -9.7%
+                     stack          449.8     -25.0%     -25.0%
+
+MAIN ADVANCE -- 54fffef -> 97d8f9b, measured for the first time
+  negative d = the newer main is faster.
+
+  op                    tok      54fffef      97d8f9b        d   per-rep us (old | new)
+  ------------------------------------------------------------------------------------
+  dispatch             8192       2032.4       2030.6    -0.1%   2033.9 2030.9 | 2030.6 2030.7
+  expanded dispatch    8192       2029.4       2030.6    +0.1%   2028.6 2030.2 | 2028.7 2032.4
+  cached dispatch      8192       2133.8       2135.8    +0.1%   2134.3 2133.4 | 2134.3 2137.2
+  combine              8192       4505.1       4462.6    -0.9%   4505.7 4504.4 | 4417.1 4508.2
+  reduced combine      8192       4886.8       4884.3    -0.1%   4891.7 4881.9 | 4891.3 4877.3
+  layer total          8192       6919.2       6914.9    -0.1%
+
+  dispatch              128        315.3        315.7    +0.1%   314.5 316.2 | 314.1 317.4
+  expanded dispatch     128        317.8        316.9    -0.3%   318.1 317.5 | 316.9 317.0
+  cached dispatch       128        318.6        320.4    +0.6%   319.5 317.7 | 320.8 320.0
+  combine               128        269.9        269.9    +0.0%   270.0 269.7 | 269.9 269.9
+  reduced combine       128        284.3        284.4    +0.0%   284.6 284.0 | 284.0 284.8
+  layer total           128        599.6        600.1    +0.1%
+
+PR EFFECT -- PREFILL (8192 tok), each arm vs main54fffef at 4 nodes
+
+  op                      main             #1+#2             #8+#9             stack
+  dispatch              2032.4    2031.1 (-0.1%)    2018.5 (-0.7%)    2017.4 (-0.7%)
+  expanded dispatch     2029.4    2029.7 (+0.0%)    2017.4 (-0.6%)    2018.0 (-0.6%)
+  cached dispatch       2133.8    2132.6 (-0.1%)    1993.3 (-6.6%)    1992.7 (-6.6%)
+  combine               4505.1    4511.5 (+0.1%)    4204.4 (-6.7%)    4176.1 (-7.3%)
+  reduced combine       4886.8    4865.2 (-0.4%)   4303.8 (-11.9%)   4300.2 (-12.0%)
+  layer total           6919.2    6896.3 (-0.3%)    6322.3 (-8.6%)    6317.6 (-8.7%)
+
+PR EFFECT -- DECODE (128 tok), each arm vs main54fffef at 4 nodes
+
+  op                      main             #1+#2             #8+#9             stack
+  dispatch               315.3    182.7 (-42.1%)    244.4 (-22.5%)    152.1 (-51.8%)
+  expanded dispatch      317.8    182.5 (-42.6%)    244.3 (-23.1%)    152.4 (-52.0%)
+  cached dispatch        318.6    182.9 (-42.6%)    242.3 (-24.0%)    144.4 (-54.7%)
+  combine                269.9     270.2 (+0.1%)     292.7 (+8.4%)     292.6 (+8.4%)
+  reduced combine        284.3     284.0 (-0.1%)     297.8 (+4.7%)     297.7 (+4.7%)
+  layer total            599.6    466.7 (-22.2%)     542.2 (-9.6%)    449.8 (-25.0%)
+
+ADDITIVITY -- PREFILL (8192 tok) at 4 nodes
+  expected = main + (#1+#2 - main) + (#8+#9 - main). residual > 0 means
+  the two PRs overlap; < 0 means they compound.
+
+  op                      main     #1+#2     #8+#9  expected     stack residual
+  dispatch              2032.4    2031.1    2018.5    2017.2    2017.4      0.1  (1% of the larger single win)
+  expanded dispatch     2029.4    2029.7    2017.4    2017.7    2018.0      0.3  (2% of the larger single win)
+  cached dispatch       2133.8    2132.6    1993.3    1992.1    1992.7      0.5  (0% of the larger single win)
+  combine               4505.1    4511.5    4204.4    4210.8    4176.1    -34.8  (-12% of the larger single win)
+  reduced combine       4886.8    4865.2    4303.8    4282.2    4300.2     18.0  (3% of the larger single win)
+  layer total           6919.2    6896.3    6322.3    6299.5    6317.6     18.1  (3% of the larger single win)
+  reps: 1,2 (the set all four arms share)
+
+ADDITIVITY -- DECODE (128 tok) at 4 nodes
+  expected = main + (#1+#2 - main) + (#8+#9 - main). residual > 0 means
+  the two PRs overlap; < 0 means they compound.
+
+  op                      main     #1+#2     #8+#9  expected     stack residual
+  dispatch               315.3     182.7     244.4     111.7     152.1     40.4  (30% of the larger single win)
+  expanded dispatch      317.8     182.5     244.3     109.1     152.4     43.3  (32% of the larger single win)
+  cached dispatch        318.6     182.9     242.3     106.6     144.4     37.8  (28% of the larger single win)
+  combine                269.9     270.2     292.7     293.0     292.6     -0.5  (-2% of the larger single win)
+  reduced combine        284.3     284.0     297.8     297.5     297.7      0.2  (2% of the larger single win)
+  layer total            599.6     466.7     542.2     409.2     449.8     40.6  (31% of the larger single win)
+  reps: 1,2 (the set all four arms share)
+
+NVLS CONTROL -- official arm, NVLS on (b300_scale_20260904) vs off (here)
+  NVLS is used by torch's NCCL process group, not by DeepEP dispatch/
+  combine, so this should be ~0. A delta larger than the on-side spread
+  would mean every number in this campaign carries it.
+
+  op                    tok    NVLS on   NVLS off        d   on per-rep (spread) | off
+  --------------------------------------------------------------------------------------------
+  dispatch             8192     2024.2     2030.6     0.3%   2026.2 2021.1 2025.2 (0.3%) | 2030.6 2030.7
+  expanded dispatch    8192     2023.9     2030.6     0.3%   2024.0 2022.9 2025.0 (0.1%) | 2028.7 2032.4
+  cached dispatch      8192     2133.7     2135.8     0.1%   2134.4 2134.1 2132.7 (0.1%) | 2134.3 2137.2
+  combine              8192     4515.8     4462.6    -1.2%   4504.6 4516.2 4526.7 (0.5%) | 4417.1 4508.2
+  reduced combine      8192     4864.4     4884.3     0.4%   4866.1 4861.0 4866.0 (0.1%) | 4891.3 4877.3
+    on n=3, off n=2
+
+  dispatch              128      318.8      315.7    -0.9%   317.7 316.5 322.0 (1.8%) | 314.1 317.4
+  expanded dispatch     128      318.9      316.9    -0.6%   318.5 317.0 321.1 (1.3%) | 316.9 317.0
+  cached dispatch       128      320.6      320.4    -0.1%   319.5 320.1 322.2 (0.8%) | 320.8 320.0
+  combine               128      270.9      269.9    -0.4%   270.8 271.1 270.9 (0.1%) | 269.9 269.9
+  reduced combine       128      285.3      284.4    -0.3%   285.7 285.2 285.1 (0.2%) | 284.0 284.8
+    on n=3, off n=2
+
+  largest |delta| over all ops and both token counts: -1.2% on combine 8192tok
+
+NODE LAYERING -- PREFILL (8192 tok), per-node mean us across 4 nodes
+
+  combine:
+    arm        rep node1..node4 (spread, slowest)
+    official     1 4612.4 4308.4 4338.9 4408.8  (7.1%, node1)
+    official     2 4322.5 5176.5 4261.5 4272.2  (21.5%, node2)
+    main         1 4252.9 4246.1 4308.8 5215.0  (22.8%, node4)
+    main         2 5185.1 4240.5 4253.0 4339.1  (22.3%, node1)
+    PR #1+#2     1 5169.6 4266.8 4280.1 4327.1  (21.2%, node1)
+    PR #1+#2     2 4317.6 5183.9 4264.2 4282.8  (21.6%, node2)
+    PR #8+#9     1 4052.1 4079.8 4607.1 4061.4  (13.7%, node3)
+    PR #8+#9     2 4059.6 4084.6 4631.9 4058.6  (14.1%, node3)
+    stack        1 4066.6 4067.2 3992.8 4591.2  (15.0%, node4)
+    stack        2 4056.1 4056.4 3966.9 4611.4  (16.2%, node4)
+
+  reduced combine:
+    arm        rep node1..node4 (spread, slowest)
+    official     1 5534.6 4642.0 4694.9 4693.8  (19.2%, node1)
+    official     2 4648.0 4646.4 5547.8 4667.0  (19.4%, node3)
+    main         1 5531.2 4647.6 4698.8 4689.1  (19.0%, node1)
+    main         2 4640.5 5548.5 4683.1 4655.4  (19.6%, node2)
+    PR #1+#2     1 4634.6 4637.4 5544.0 4658.9  (19.6%, node3)
+    PR #1+#2     2 4634.5 4633.0 4662.2 5517.0  (19.1%, node4)
+    PR #8+#9     1 4564.5 4238.8 4104.8 4219.6  (11.2%, node1)
+    PR #8+#9     2 4235.0 4228.8 4600.4 4238.6  (8.8%, node3)
+    stack        1 4220.8 4558.2 4117.0 4227.0  (10.7%, node2)
+    stack        2 4240.9 4229.0 4570.8 4238.0  (8.1%, node3)
+
+NODE LAYERING -- DECODE (128 tok), per-node mean us across 4 nodes
+
+  combine:
+    arm        rep node1..node4 (spread, slowest)
+    official     1 255.4 264.3 270.3 289.8  (13.4%, node4)
+    official     2 255.7 264.5 269.3 290.3  (13.5%, node4)
+    main         1 255.7 265.1 270.6 288.6  (12.9%, node4)
+    main         2 255.7 264.4 269.8 289.1  (13.1%, node4)
+    PR #1+#2     1 256.3 264.2 271.9 289.0  (12.7%, node4)
+    PR #1+#2     2 256.7 266.2 268.7 288.8  (12.5%, node4)
+    PR #8+#9     1 277.0 286.4 289.6 314.9  (13.7%, node4)
+    PR #8+#9     2 277.5 286.5 295.8 313.6  (13.0%, node4)
+    stack        1 276.7 284.9 290.2 317.4  (14.7%, node4)
+    stack        2 277.3 285.3 292.5 316.3  (14.0%, node4)
+
+  reduced combine:
+    arm        rep node1..node4 (spread, slowest)
+    official     1 270.2 278.4 284.7 302.6  (12.0%, node4)
+    official     2 270.6 278.2 284.2 306.0  (13.1%, node4)
+    main         1 270.1 278.8 283.9 305.6  (13.1%, node4)
+    main         2 270.3 278.8 284.0 302.9  (12.1%, node4)
+    PR #1+#2     1 270.0 278.3 284.1 303.1  (12.3%, node4)
+    PR #1+#2     2 270.0 279.0 284.2 303.4  (12.4%, node4)
+    PR #8+#9     1 281.8 291.6 295.2 319.8  (13.5%, node4)
+    PR #8+#9     2 283.0 291.4 297.5 321.8  (13.7%, node4)
+    stack        1 281.6 290.1 296.1 320.8  (13.9%, node4)
+    stack        2 282.8 290.8 299.5 319.8  (13.1%, node4)
+
+AUDIT -- reps on disk and rank completeness (n must equal 32)
+
+   8192tok official  rep1:32/32 rep2:32/32
+   8192tok main      rep1:32/32 rep2:32/32
+   8192tok PR #1+#2  rep1:32/32 rep2:32/32
+   8192tok PR #8+#9  rep1:32/32 rep2:32/32
+   8192tok stack     rep1:32/32 rep2:32/32
+    128tok official  rep1:32/32 rep2:32/32
+    128tok main      rep1:32/32 rep2:32/32
+    128tok PR #1+#2  rep1:32/32 rep2:32/32
+    128tok PR #8+#9  rep1:32/32 rep2:32/32
+    128tok stack     rep1:32/32 rep2:32/32
+
+  no rep was excluded as an outlier -- but with n=2 the filter can
+  only fire on a pair that disagrees by ~2x. Read the per-rep columns.
+

@@ -727,6 +727,78 @@ every rep (5530 / 5514 / 5520 vs ~4640 µs elsewhere) while plain `combine` in t
 is slowest on a *different* node. One node's log would therefore have been wrong by up to a
 fifth, in a direction that depends on which op you read.
 
+### B300 all five arms at four nodes (2026-09-04)
+
+The four-arm b300 table is 2 nodes, and the scaling campaign above shows why that is not
+enough: the term that erodes the PRs grows with the world. So all of it was re-run at
+**4 nodes / 32 ranks**, and the two upstream `main`s were put in the same campaign — 5 arms
+× {8192, 128} tok at 12 SM, `REPS=2`, **20/20 rc 0**, every cell pooled from all four nodes'
+logs at **32/32 ranks**, `verify_run.sh` clean over 80 logs. Arms: `official` = **`97d8f9b`**
+(latest upstream `main`), `main` = **`54fffef`** (previous `main`, the merge base of all four
+PRs), `bfbdd15` = #1+#2, `3c737dc` = #8+#9, `a35285f` = the two merged. Raw logs, generator,
+tables: [`results/b300_stack5_4N_20260904/`](results/b300_stack5_4N_20260904/tables.txt).
+
+**Decode (128 tok), each arm against the merge base:**
+
+| op | main | #1+#2 | #8+#9 | stack |
+|---|---|---|---|---|
+| dispatch | 315.3 µs | 182.7 **−42.1%** | 244.4 −22.5% | **152.1 −51.8%** |
+| cached dispatch | 318.6 µs | 182.9 −42.6% | 242.3 −24.0% | **144.4 −54.7%** |
+| combine | 269.9 µs | 270.2 +0.1% | 292.7 **+8.4%** | 292.6 **+8.4%** |
+| reduced combine | 284.3 µs | 284.0 −0.1% | 297.8 +4.7% | 297.7 +4.7% |
+| layer total | 599.6 µs | 466.7 −22.2% | 542.2 −9.6% | **449.8 −25.0%** |
+
+**Prefill (8192 tok):**
+
+| op | main | #1+#2 | #8+#9 | stack |
+|---|---|---|---|---|
+| dispatch | 2032.4 µs | 2031.1 −0.1% | 2018.5 −0.7% | 2017.4 −0.7% |
+| cached dispatch | 2133.8 µs | 2132.6 −0.1% | 1993.3 **−6.6%** | 1992.7 −6.6% |
+| combine | 4505.1 µs | 4511.5 +0.1% | 4204.4 −6.7% | 4176.1 **−7.3%** |
+| reduced combine | 4886.8 µs | 4865.2 −0.4% | 4303.8 **−11.9%** | 4300.2 −12.0% |
+| layer total | 6919.2 µs | 6896.3 −0.3% | 6322.3 −8.6% | 6317.6 **−8.7%** |
+
+**The two `main`s are the same binary as far as this benchmark can tell.** `54fffef` →
+`97d8f9b` moves no op by more than **0.9%** (prefill `combine` 4505.1 → 4462.6 µs) and the
+layer total by ±0.1% at both token counts. So every PR delta measured against `54fffef`
+transfers to latest `main` unchanged — upstream has not absorbed any of it.
+
+**The 320 µs decode floor is gone at four nodes.** `main` sits on it (315.3 µs); the stack
+reaches **152.1 µs**. The two PRs overlap by about a third: expected-if-independent is
+111.7 µs, measured is 152.1, a **+40.4 µs residual = 30%** of the larger single win. They
+still compound — neither alone gets past 182.7 µs — but a decode budget must not add the
+two published numbers. On prefill `combine` the residual has the other sign (−34.8 µs,
+−12%): there the two PRs slightly help each other.
+
+**#8+#9 is a prefill-for-decode trade at this scale.** It buys −11.9% on prefill `reduced
+combine` and −6.6% on prefill `cached dispatch`, and pays **+8.4%** on decode `combine`
+(+4.7% reduced). Stacked with #1+#2 the decode layer still wins (−25.0% vs −22.2% for
+#1+#2 alone), so the trade is worth taking in a stack but not on its own for a decode
+instance. #8+#9 also changes the QP layout — its arms report **13/13** QPs against
+**11/11** on the other three.
+
+**combine's node layering has two different shapes.** On decode, `node4` is the slowest node
+in **all 20 observations** (5 arms × 2 reps × `combine` and `reduced combine`), and the four
+per-node means are monotone in node index (`official` `reduced combine`:
+270.4 / 278.3 / 284.4 / 304.3 µs, spread 12.0–13.9% across every arm) — a stable gradient,
+not jitter. On prefill it is instead one node ~19% off the other three (5517–5549 vs
+~4640 µs) and *which* node moves between the two reps, so with `REPS=2` its stability is not
+decidable here; the magnitude is (19.0–19.6% on `main` / `official` / #1+#2). #8+#9 halves
+that prefill spread, to **8.1–11.2%**.
+
+**Every cell in this campaign ran with `NCCL_NVLS_ENABLE=0`**, and it is in the knob tag
+(`qpdefault-nvls0`) so these logs can never pool with an NVLS-on campaign. It is not a
+tuning choice: the NVLink-multicast team on these hosts wedges (`fabricmanager`: *"All GPUs
+in the partition need to be reset to recover"*) and NCCL then dies in `init_process_group`
+with `CUDA error 401`. Only a reboot clears it — an FM restart, `nvidia-smi -r` and
+`rmmod nvidia` all fail. NVLS serves torch's NCCL process group, not DeepEP's
+dispatch/combine, and that is checked rather than asserted: the `official` arm at these
+exact cells was measured **NVLS on** in `results/b300_scale_20260904`, and the largest
+delta over all ops and both token counts is **1.2%** (prefill `combine`), with decode
+`dispatch` at −0.9% against that campaign's own 1.8% cross-rep spread. Independently,
+#1+#2's decode dispatch is 182.7 µs here against 183 µs there — 0.2%, across a different
+day and the flag.
+
 An older `sm_103` campaign on a *different* image (the AWS `awsome-distributed-ai#1234`
 recipe: CUDA 13.1.2, torch 2.11, same DeepEP pin) is in
 `../adai-ep-comparison-b300/RESULTS_b300.md`. It agrees on direction where the two overlap
