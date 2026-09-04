@@ -1,0 +1,171 @@
+EFA vs DeepEP's published CX7-InfiniBand numbers
+================================================================
+
+Workload, identical on both sides: 8192 tokens, hidden 7168, top-8,
+256 experts, FP8 dispatch, BF16 combine.
+Metric, identical on both sides: logical scale-out GB/s INCLUDING the
+  local node's share -- upstream says so verbatim, and it is test_ep.py's
+  SO column without --ignore-local-traffic.
+us = all-rank mean, pooled from every node's log, averaged over reps.
+wire% = SO x (N-1)/N / ceiling.  p5en/CX7 ceiling 50 GB/s,
+  b300 ceiling 100 GB/s (TWO EFA devices per GPU).
+`*` marks a figure whose denominator is OUR assumption, not upstream's
+  statement: upstream publishes no NIC line rate.
+
+p5en logs:  /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/p5en_2n4n_20260825/logs
+b300 logs:  /Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_scale_20260904/logs
+
+UPSTREAM'S TABLE, transcribed verbatim (deepseek-ai/DeepEP README,
+  "## Performance", read 2026-09-04). Columns are literally
+  "Dispatch/Combine Bottleneck Bandwidth", every cell tagged (RDMA).
+
+  Arch   NIC       Topo        dispatch    combine    #SM
+  SM90   CX7       EP 8 x 2     90 GB/s    81 GB/s     12
+  SM90   CX7       EP 8 x 4     61 GB/s    61 GB/s      6
+  SM100  CX7       EP 8 x 2     90 GB/s    91 GB/s     12
+  SM100  N/A       EP 8        726 GB/s   740 GB/s 64 (Max perf)   <- intranode, out of scope here
+  SM100  N/A       EP 8        643 GB/s   675 GB/s 24 (Min #SM)   <- intranode, out of scope here
+
+  The two NVLink rows are a different fabric and a different question;
+  our own NVLink numbers are not in this repo, so they are not compared.
+
+SM90 HEAD-TO-HEAD -- p5en/H200/EFA vs upstream SM90/CX7, SM MATCHED
+  Upstream's EP 8x4 row is SIX SMs, not twelve. Both sides of each row
+  below are at the same SM count; see CROSS-CHECK for what that costs.
+
+  upstream row           op             theirs   wire%*          ours    wire% ours/theirs   ours us
+  --------------------------------------------------------------------------------------------------
+  SM90 CX7 EP 8x2, 12sm  dispatch      90 GB/s    90.0%    81.25 GB/s    81.2%      0.903     1502.9 (n=1)
+  SM90 CX7 EP 8x2, 12sm  combine       81 GB/s    81.0%    65.50 GB/s    65.5%      0.809     3602.5 (n=1)
+  SM90 CX7 EP 8x4, 6sm   dispatch      61 GB/s    91.5%    55.00 GB/s    82.5%      0.902     4030.7 (n=1)
+  SM90 CX7 EP 8x4, 6sm   combine       61 GB/s    91.5%    52.00 GB/s    78.0%      0.852     8268.2 (n=1)
+
+  Read the dispatch rows together: the ratio is the same at both scales,
+  so EFA's dispatch deficit against IB is a LEVEL, not a scaling term.
+  Combine is the weak op, and it is the one that closes with node count --
+  IB is already at 91.5%* wire at 4 nodes and has no room left.
+
+COMBINE IS AMBIGUOUS ON UPSTREAM'S SIDE -- and it matters
+  test_ep.py prints `combine` AND `reduced combine`; upstream's table has
+  one column. The head-to-head above uses `combine`, the reading that
+  FAVOURS us. If upstream's figure is the reduced variant, substitute:
+
+  upstream row                theirs   ours (reduced) ours/theirs
+  SM90 CX7 EP 8x2, 12sm      81 GB/s    55.44 GB/s      0.684
+  SM90 CX7 EP 8x4, 6sm       61 GB/s    44.94 GB/s      0.737
+
+CROSS-CHECK -- what quoting the WRONG SM count would have been worth
+  Upstream's 4-node row is 6 SM. Our 4-node 12-SM cell against it:
+
+    dispatch  12 SM  56.00 GB/s vs 6 SM  55.00 GB/s -> +1.8% free
+    combine   12 SM  54.42 GB/s vs 6 SM  52.00 GB/s -> +4.6% free
+
+  Small, because at 4 nodes our dispatch is nearly SM-flat. At 2 nodes the
+  same axis is anything but:
+    dispatch  12 SM  81.25 GB/s vs 6 SM  53.50 GB/s -> +51.9%
+    combine   12 SM  65.50 GB/s vs 6 SM  38.75 GB/s -> +69.0%
+
+  So the axis has to be matched; at 2 nodes it decides the answer.
+
+FORK CONTROL -- does it matter which tree we compare from?
+
+  op                   official        main        d
+  dispatch                81.25       81.00    -0.3%
+  combine                 65.50       65.62     0.2%
+  reduced combine         55.44       55.31    -0.2%
+
+  2N / 12 SM, 1 rep(s) vs 2. The two trees are the same measurement,
+  so the head-to-head does not depend on which one we quote.
+
+P5EN CELLS (p5en.48xlarge, H200 = SM90, GIN type 5) -- every cell we have, with the denominator stated
+
+  cell      arm       n op                       us    SO GB/s    wire%
+  ---------------------------------------------------------------------
+  2N 12 SM  official  1 dispatch             1502.9      81.25    81.2%
+                      1 combine              3602.5      65.50    65.5%
+                      1 reduced combine      4237.9      55.44    55.4%
+
+  2N 12 SM  main      2 dispatch             1502.0      81.00    81.0%
+                      2 combine              3599.5      65.62    65.6%
+                      2 reduced combine      4246.4      55.31    55.3%
+
+  2N  6 SM  official  1 dispatch             2290.5      53.50    53.5%
+                      1 combine              6052.8      38.75    38.8%
+                      1 reduced combine      7377.7      31.88    31.9%
+
+  2N 24 SM  official  3 dispatch             1535.7      79.65    79.6%
+                      3 combine              3534.0      66.65    66.6%
+                      3 reduced combine      3362.6      70.27    70.3%
+
+  4N  6 SM  official  1 dispatch             4030.7      55.00    82.5%
+                      1 combine              8268.2      52.00    78.0%
+                      1 reduced combine      9518.8      44.94    67.4%
+
+  4N 12 SM  official  3 dispatch             3955.3      56.00    84.0%
+                      3 combine              7842.6      54.42    81.6%
+                      3 reduced combine      7943.2      53.79    80.7%
+
+  4N 24 SM  official  2 dispatch             3972.7      55.83    83.7%
+                      2 combine              7710.7      55.14    82.7%
+                      2 reduced combine      7728.3      55.03    82.5%
+
+B300 CONTEXT -- NOT a head-to-head row
+  p6-b300 is sm_103, not sm_100, and has TWO EFA devices per GPU
+  (100 GB/s vs CX7's 50). So its GB/s cannot be compared to a
+  50 GB/s row, and its wire% answers a different question: not
+  "how close to the wire" but "can 12 SM fill twice the wire".
+  Upstream's only SM100 row is EP 8x2 / 12 SM: 90 GB/s dispatch,
+  91 combine -- 2 nodes only, no SM100 4-node row exists upstream.
+
+B300 CELLS (p6-b300.48xlarge, sm_103, GIN type 5, ovlp=0) -- every cell we have, with the denominator stated
+
+  cell      arm       n op                       us    SO GB/s    wire%
+  ---------------------------------------------------------------------
+  2N 12 SM  official  3 dispatch             1052.6     116.19    58.1%
+                      3 combine              2904.9      80.73    40.4%
+                      3 reduced combine      3765.2      62.25    31.1%
+
+  2N 24 SM  official  3 dispatch              894.1     136.56    68.3%
+                      3 combine              1849.3     127.65    63.8%
+                      3 reduced combine      2254.2     104.04    52.0%
+
+  4N 12 SM  official  3 dispatch             2024.2     109.27    82.0%
+                      3 combine              4515.8      94.75    71.1%
+                      3 reduced combine      4864.4      87.90    65.9%
+
+  4N 24 SM  official  3 dispatch             2022.9     109.43    82.1%
+                      3 combine              3971.7     107.62    80.7%
+                      3 reduced combine      3916.4     109.22    81.9%
+
+  Two readings, both true and pulling opposite ways:
+    - absolute: b300 2N/24 SM dispatch is 136.56 GB/s against upstream's
+      SM100 90, i.e. 1.52x the logical bandwidth -- on 2x the wire.
+    - efficiency: that is only 68.3% of b300's own ceiling. 12 SM
+      cannot fill 100 GB/s at 2 nodes; the 4-node cell reaches 82.0%
+      because per-rank cross-node bytes grow with node count.
+
+  The apples-to-apples SM100 comparison is p6-b200 (ONE EFA per GPU =
+  50 GB/s, same ceiling as CX7): 82.6% dispatch / 69.8% combine at
+  2N/12 SM, i.e. 0.918 / 0.767 of upstream's SM100 row. Those are AWS's
+  numbers, reproduced by us on that cell to 1.6-2.9%; we have no b200
+  nodes now, so this repo cannot refresh them.
+
+AUDIT -- rank completeness (ranks must equal 8 x nodes)
+
+  p5en  2N 12 SM  official n=1  world=16  ranks=16
+  p5en  2N 12 SM  main     n=2  world=16  ranks=16
+  p5en  2N  6 SM  official n=1  world=16  ranks=16
+  p5en  2N 24 SM  official n=3  world=16  ranks=16
+  p5en  4N  6 SM  official n=1  world=32  ranks=32
+  p5en  4N 12 SM  official n=3  world=32  ranks=32
+  p5en  4N 24 SM  official n=2  world=32  ranks=32
+  b300  2N 12 SM  official n=3  world=16  ranks=16
+  b300  2N 24 SM  official n=3  world=16  ranks=16
+  b300  4N 12 SM  official n=3  world=32  ranks=32
+  b300  4N 24 SM  official n=3  world=32  ranks=32
+
+  NOTES (n=1 is a limitation, not an error):
+    p5en 2N 12 SM official: n=1, single run
+    p5en 2N  6 SM official: n=1, single run
+    p5en 4N  6 SM official: n=1, single run
+
