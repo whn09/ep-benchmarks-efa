@@ -485,7 +485,7 @@ arm, so drift cannot be read as an arm effect.
 
 | `PRESET` | cells per rep | reproduces |
 |---|---|---|
-| `default` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok | 7 — the general-purpose 2-arm list |
+| `default` | `official` × {8192, 128} tok × {12, 24} SM; `prs` × {8192, 128} tok @ 12 SM; `prs` + `EP_MIN_TOKENS_PER_PART=1` @ 128 tok | 7 — the general-purpose 2-arm list; `results/b300_scale_20260904` ran it at 1, 2 and 4 nodes |
 | `stack` | 4 arms (upstream `main`, #1+#2, #8+#9, merged stack) × {8192, 128} tok @ 12 SM, plus `EP_NUM_SUB_PARTS=1` on the arms that read it | 13 — `results/p5en_stack_20260831`, `results/b300_stack_20260903` |
 | `smsweep` | the same 4 arms × {8192, 128} tok at every SM in `SMS` (default 24), default part geometry, plus two 12 SM stack cells as a drift anchor | 10 — `results/b300_sm24_20260903` (`SMS=24 PORT_BASE=8700`) |
 
@@ -668,6 +668,64 @@ is **58.1 µs = 39%** of the larger single win, so the two PRs overlap far less 
 on p5en (85%); decode combine residual is −0.3 µs, i.e. fully additive. The negative control
 `main` + `EP_NUM_SUB_PARTS=1` moved decode dispatch **+0.5%** (278.9 vs 277.5 µs), which is
 what it should do in an image whose JIT never reads that variable.
+
+### B300 node-count scaling — 1 / 2 / 4 nodes (2026-09-04)
+
+Every b300 campaign above is 2 nodes, which measures the crossing cost once and cannot
+separate a **fixed** per-crossing tax from a term that **grows with the world**. This one
+runs `PRESET=default` at 1, 2 and 4 nodes on B300-1/2/3/4 on one day: 3 × 21 cells,
+**63/63 rc 0**, every cell pooled from every node's log at full rank count (8 / 16 / 32),
+no rep excluded as an outlier, `verify_run.sh` clean over all 147 logs. Two arms — the
+`:sm103` image, whose `BUILD_REF` is **`97d8f9b`** (upstream `main` as of this run, *newer*
+than the `54fffef` the four-arm table above is pinned to), and `bfbdd15` = PRs #1+#2.
+Raw logs, generator and tables:
+[`results/b300_scale_20260904/`](results/b300_scale_20260904/tables.txt).
+
+**Time per doubling, 12 SM, `official` arm.** `1N→2N` is the whole cost of leaving the box;
+`2N→4N` is a doubling once crossing is already paid for.
+
+| op | 1N | 2N | 4N | 1N→2N | 2N→4N |
+|---|---|---|---|---|---|
+| prefill dispatch | 464.2 µs | 1052.6 | 2024.2 | 2.27× | 1.92× |
+| prefill reduced combine | 1343.2 µs | 3765.2 | 4864.4 | 2.80× | **1.29×** |
+| decode dispatch | 26.0 µs | 291.8 | 318.8 | **11.24×** | **1.09×** |
+| decode reduced combine | 54.4 µs | 185.1 | 285.3 | 3.40× | 1.54× |
+
+Prefill dispatch scales almost linearly per doubling while its combine flattens; **decode
+dispatch does the opposite** — 11.24× to get off the box, then essentially free (1.09×).
+That flat step is the 320 µs decode floor: 318.8 µs at 12 SM and 317.7 µs at 24 SM, i.e.
+SM-invariant.
+
+**PRs #1+#2 across the axis** (`prs` vs `official`, same 12 SM cells):
+
+| op | 1N | 2N | 4N |
+|---|---|---|---|
+| decode dispatch | 26 → 26 µs +0.1% | 292 → 131 µs **−55.0%** | 319 → 183 µs **−42.5%** |
+| decode layer | 80 → 81 µs +1.0% | 477 → 316 µs −33.7% | 604 → 468 µs −22.5% |
+| prefill layer | 1807 → 1806 µs −0.1% | 4818 → 4823 µs +0.1% | 6889 → 6902 µs +0.2% |
+
+Three things this says that 2 nodes could not. **(1)** At 1 node the two arms are identical
+(±1.4% on every op) — the PR pair only exists once traffic crosses, so the 1N column doubles
+as the arm-comparison control. **(2)** The win **survives 4 nodes** on b300 at −42.5% on
+decode dispatch, where the p5en/H200 measurement had it collapsing at that scale. It shrinks
+because the clamp removes the floor and what is left grows: `prs` decode dispatch goes 2N→4N
+at 1.40× against `official`'s 1.09×. **(3)** It is the clamp and nothing else — the same
+binary with `EP_MIN_TOKENS_PER_PART=1` lands on `official` within **+0.9% / −0.1%** at
+2N / 4N (294.6 vs 291.8; 318.4 vs 318.8 µs), so `official`-vs-`prs` is not a build or
+environment difference.
+
+**12 → 24 SM is not one trade, it is two.** On the `official` arm, prefill keeps its win at
+every scale (layer −13.9% / −34.7% / −13.8% at 1N / 2N / 4N) but **decode's win dies at 4
+nodes**: layer −14.1% at 1N, −12.2% at 2N, **+0.3%** at 4N. A decode instance sized from the
+2-node table would be over-provisioning SMs at 4 nodes.
+
+**combine is layered by node here too, and the layer is stable.** At 4N the per-node means
+spread **21.4–22.0%** on prefill `combine` and 19.1–19.4% on prefill `reduced combine`,
+10.6–14.3% on decode `combine`, in all three reps — and unlike
+the 2-node case the slow node does not flip: prefill `reduced combine` has node4 slow in
+every rep (5530 / 5514 / 5520 vs ~4640 µs elsewhere) while plain `combine` in the same runs
+is slowest on a *different* node. One node's log would therefore have been wrong by up to a
+fifth, in a direction that depends on which op you read.
 
 An older `sm_103` campaign on a *different* image (the AWS `awsome-distributed-ai#1234`
 recipe: CUDA 13.1.2, torch 2.11, same DeepEP pin) is in

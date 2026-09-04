@@ -1,0 +1,428 @@
+p6-b300.48xlarge x 1/2/4 (sm_103), EFA 1.50.0 + efa.ko 3.3.0, GIN type 5
+EPRUNS=/Users/henanwan/Documents/workspace/moonshot/ep-benchmarks-efa/deepep-v2-efa-official/results/b300_scale_20260904/logs
+
+CONFIG -- read out of the logs, not assumed
+
+  arm       N    tag SM BUILD_REF                                  #SM    #QPs      world
+  official  1    12     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   12     11/11     8
+  official  1    24     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   24     11/11     8
+  official  2    12     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   12     11/11     16
+  official  2    24     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   24     11/11     16
+  official  4    12     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   12     11/11     32
+  official  4    24     97d8f9bcc1be31e9036db2ab591ef9b9f4e38619   24     11/11     32
+  PR #1+#2  1    12     bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11     8
+  PR #1+#2  2    12     bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11     16
+  PR #1+#2  4    12     bfbdd15ff448783f877cb2210cb3246c8452b05e   12     11/11     32
+
+  every cell's measured #SM and world size equal what its tag claims.
+
+PREFILL -- 8192 tok, 1 node / 8 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official        464.2                     0      699     324.6  464.0 / 464.5 / 464.2
+                     PR #1+#2        464.3        +0.0%        0      699     324.6  464.3 / 464.4 / 464.0
+
+  expanded dispatch  official        464.4                     0      699     324.6  464.5 / 464.6 / 464.1
+                     PR #1+#2        464.0        -0.1%        0      700     324.6  464.0 / 463.9 / 464.1
+
+  cached dispatch    official        470.3                     0      690     324.6  469.9 / 470.9 / 470.3
+                     PR #1+#2        470.6        +0.1%        0      690     324.6  470.8 / 470.6 / 470.4
+
+  combine            official       1041.3                     0      598     622.9  1041.1 / 1041.4 / 1041.5
+                     PR #1+#2       1042.1        +0.1%        0      598     622.9  1041.6 / 1042.9 / 1041.9
+
+  reduced combine    official       1343.2                     0      464     622.9  1344.2 / 1344.4 / 1341.1
+                     PR #1+#2       1341.8        -0.1%        0      464     622.9  1338.2 / 1356.0 / 1331.1
+
+  layer total        official       1807.5             
+                     PR #1+#2       1806.0        -0.1%
+
+DECODE -- 128 tok, 1 node / 8 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official         26.0                     0      191       5.0  25.9 / 26.1 / 25.9
+                     PR #1+#2         26.0        +0.1%        0      191       5.0  25.9 / 26.1 / 26.0
+
+  expanded dispatch  official         25.9                     0      191       5.0  25.9 / 25.9 / 25.9
+                     PR #1+#2         26.0        +0.4%        0      191       5.0  26.0 / 25.9 / 26.0
+
+  cached dispatch    official         25.3                     0      197       5.0  25.1 / 24.9 / 25.8
+                     PR #1+#2         25.1        -0.4%        0      198       5.0  24.6 / 25.6 / 25.3
+
+  combine            official         33.6                     0      284       9.5  33.5 / 33.2 / 34.0
+                     PR #1+#2         33.7        +0.4%        0      283       9.5  33.0 / 34.3 / 33.7
+
+  reduced combine    official         54.4                     0      175       9.5  52.4 / 53.6 / 57.2
+                     PR #1+#2         55.2        +1.4%        0      173       9.5  52.7 / 56.3 / 56.5
+
+  layer total        official         80.4             
+                     PR #1+#2         81.2        +1.0%
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official       1052.6                   116      380     399.8  1054.9 / 1052.9 / 1050.1
+                     PR #1+#2       1050.9        -0.2%      116      380     399.8  1050.3 / 1050.7 / 1051.6
+
+  expanded dispatch  official       1048.6                   116      381     399.8  1046.9 / 1050.7 / 1048.2
+                     PR #1+#2       1051.4        +0.3%      116      380     399.8  1052.2 / 1050.9 / 1051.2
+
+  cached dispatch    official       1038.6                   118      385     399.8  1038.2 / 1037.8 / 1039.9
+                     PR #1+#2       1039.5        +0.1%      118      385     399.8  1038.1 / 1040.3 / 1040.2
+
+  combine            official       2904.9                    81      264     767.2  2902.8 / 2905.9 / 2905.8
+                     PR #1+#2       2904.3        -0.0%       81      264     767.2  2903.8 / 2904.6 / 2904.6
+
+  reduced combine    official       3765.2                    62      204     767.2  3764.3 / 3764.2 / 3767.2
+                     PR #1+#2       3772.5        +0.2%       62      203     767.2  3765.6 / 3777.3 / 3774.6
+
+  layer total        official       4817.9             
+                     PR #1+#2       4823.4        +0.1%
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official        291.8                     6       20       5.9  291.9 / 291.9 / 291.7
+                     PR #1+#2        131.2       -55.0%       14       45       5.9  131.2 / 130.8 / 131.7
+
+  expanded dispatch  official        293.0                     6       20       5.9  292.1 / 293.1 / 293.9
+                     PR #1+#2        130.4       -55.5%       14       45       5.9  130.2 / 130.9 / 130.1
+
+  cached dispatch    official        277.7                     6       21       5.9  276.0 / 279.0 / 278.2
+                     PR #1+#2        118.9       -57.2%       15       49       5.9  119.4 / 118.5 / 119.0
+
+  combine            official        166.4                    21       68      11.3  166.4 / 166.3 / 166.4
+                     PR #1+#2        165.9        -0.3%       21       68      11.3  166.0 / 165.9 / 165.9
+
+  reduced combine    official        185.1                    19       61      11.3  185.2 / 185.1 / 185.0
+                     PR #1+#2        184.8        -0.2%       19       61      11.3  185.1 / 184.7 / 184.6
+
+  layer total        official        476.9             
+                     PR #1+#2        316.0       -33.7%
+
+PREFILL -- 8192 tok, 4 nodes / 32 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official       2024.2                   109      220     444.9  2026.2 / 2021.1 / 2025.2
+                     PR #1+#2       2026.0        +0.1%      109      220     444.9  2024.3 / 2026.2 / 2027.4
+
+  expanded dispatch  official       2023.9                   109      220     444.9  2024.0 / 2022.9 / 2025.0
+                     PR #1+#2       2022.8        -0.1%      109      220     444.9  2024.2 / 2021.6 / 2022.7
+
+  cached dispatch    official       2133.7                   104      208     444.9  2134.4 / 2134.1 / 2132.7
+                     PR #1+#2       2131.8        -0.1%      104      209     444.9  2133.2 / 2131.3 / 2130.8
+
+  combine            official       4515.8                    95      191     853.7  4504.6 / 4516.2 / 4526.7
+                     PR #1+#2       4508.6        -0.2%       95      191     853.7  4502.5 / 4501.3 / 4522.1
+
+  reduced combine    official       4864.4                    88      177     853.7  4866.1 / 4861.0 / 4866.0
+                     PR #1+#2       4876.4        +0.2%       88      176     853.7  4876.8 / 4890.8 / 4861.7
+
+  layer total        official       6888.5             
+                     PR #1+#2       6902.4        +0.2%
+
+DECODE -- 128 tok, 4 nodes / 32 ranks, 12 SM, default geometry, GIN type 5, ovlp=0
+  `d vs official` is within this node count. Neither rate is a wire rate and
+  neither is comparable across node counts (see BYTES); the us column is the
+  metric. SO is a structural 0 at 1 node -- see the header.
+
+  op                 arm                us  d vs offic.  SO GB/s  SU GB/s SU MB/rank  per-rep us
+  ----------------------------------------------------------------------------------------------
+  dispatch           official        318.8                     9       19       6.1  317.7 / 316.5 / 322.0
+                     PR #1+#2        183.4       -42.5%       17       33       6.1  184.4 / 183.1 / 182.6
+
+  expanded dispatch  official        318.9                    10       19       6.1  318.5 / 317.0 / 321.1
+                     PR #1+#2        182.3       -42.8%       17       34       6.1  182.5 / 182.0 / 182.5
+
+  cached dispatch    official        320.6                     9       19       6.1  319.5 / 320.1 / 322.2
+                     PR #1+#2        184.1       -42.6%       17       33       6.1  184.0 / 184.1 / 184.3
+
+  combine            official        270.9                    22       44      11.7  270.8 / 271.1 / 270.9
+                     PR #1+#2        270.5        -0.2%       22       44      11.7  271.2 / 270.2 / 270.2
+
+  reduced combine    official        285.3                    21       41      11.7  285.7 / 285.2 / 285.1
+                     PR #1+#2        285.0        -0.1%       21       41      11.7  285.6 / 285.0 / 284.4
+
+  layer total        official        604.1             
+                     PR #1+#2        468.4       -22.5%
+
+SCALING -- PREFILL (8192 tok), 12 SM: what adding nodes costs
+  x1N is the ratio to the single-node cell (all traffic local, the zero of
+  the crossing axis). `x per 2x` is each doubling separately: 2N/1N is the
+  cost of leaving the box at all, 4N/2N the cost of a doubling once
+  crossing is already paid for. Those two being different is the point.
+
+  op                 arm            1N us     2N us     4N us  x vs 1N              x per 2x
+  dispatch           official       464.2    1052.6    2024.2  2N 2.27x  4N 4.36x   1N->2N 2.27x  2N->4N 1.92x
+                     PR #1+#2       464.3    1050.9    2026.0  2N 2.26x  4N 4.36x   1N->2N 2.26x  2N->4N 1.93x
+
+  expanded dispatch  official       464.4    1048.6    2023.9  2N 2.26x  4N 4.36x   1N->2N 2.26x  2N->4N 1.93x
+                     PR #1+#2       464.0    1051.4    2022.8  2N 2.27x  4N 4.36x   1N->2N 2.27x  2N->4N 1.92x
+
+  cached dispatch    official       470.3    1038.6    2133.7  2N 2.21x  4N 4.54x   1N->2N 2.21x  2N->4N 2.05x
+                     PR #1+#2       470.6    1039.5    2131.8  2N 2.21x  4N 4.53x   1N->2N 2.21x  2N->4N 2.05x
+
+  combine            official      1041.3    2904.9    4515.8  2N 2.79x  4N 4.34x   1N->2N 2.79x  2N->4N 1.55x
+                     PR #1+#2      1042.1    2904.3    4508.6  2N 2.79x  4N 4.33x   1N->2N 2.79x  2N->4N 1.55x
+
+  reduced combine    official      1343.2    3765.2    4864.4  2N 2.80x  4N 3.62x   1N->2N 2.80x  2N->4N 1.29x
+                     PR #1+#2      1341.8    3772.5    4876.4  2N 2.81x  4N 3.63x   1N->2N 2.81x  2N->4N 1.29x
+
+  layer total        official      1807.5    4817.9    6888.5                       1N->2N 2.67x  2N->4N 1.43x
+  layer total        PR #1+#2      1806.0    4823.4    6902.4                       1N->2N 2.67x  2N->4N 1.43x
+
+SCALING -- DECODE (128 tok), 12 SM: what adding nodes costs
+  x1N is the ratio to the single-node cell (all traffic local, the zero of
+  the crossing axis). `x per 2x` is each doubling separately: 2N/1N is the
+  cost of leaving the box at all, 4N/2N the cost of a doubling once
+  crossing is already paid for. Those two being different is the point.
+
+  op                 arm            1N us     2N us     4N us  x vs 1N              x per 2x
+  dispatch           official        26.0     291.8     318.8  2N 11.24x  4N 12.28x 1N->2N 11.24x  2N->4N 1.09x
+                     PR #1+#2        26.0     131.2     183.4  2N 5.05x  4N 7.05x   1N->2N 5.05x  2N->4N 1.40x
+
+  expanded dispatch  official        25.9     293.0     318.9  2N 11.32x  4N 12.32x 1N->2N 11.32x  2N->4N 1.09x
+                     PR #1+#2        26.0     130.4     182.3  2N 5.02x  4N 7.02x   1N->2N 5.02x  2N->4N 1.40x
+
+  cached dispatch    official        25.3     277.7     320.6  2N 10.99x  4N 12.69x 1N->2N 10.99x  2N->4N 1.15x
+                     PR #1+#2        25.1     118.9     184.1  2N 4.73x  4N 7.32x   1N->2N 4.73x  2N->4N 1.55x
+
+  combine            official        33.6     166.4     270.9  2N 4.96x  4N 8.07x   1N->2N 4.96x  2N->4N 1.63x
+                     PR #1+#2        33.7     165.9     270.5  2N 4.93x  4N 8.03x   1N->2N 4.93x  2N->4N 1.63x
+
+  reduced combine    official        54.4     185.1     285.3  2N 3.40x  4N 5.24x   1N->2N 3.40x  2N->4N 1.54x
+                     PR #1+#2        55.2     184.8     285.0  2N 3.35x  4N 5.17x   1N->2N 3.35x  2N->4N 1.54x
+
+  layer total        official        80.4     476.9     604.1                       1N->2N 5.93x  2N->4N 1.27x
+  layer total        PR #1+#2        81.2     316.0     468.4                       1N->2N 3.89x  2N->4N 1.48x
+
+PR #1+#2 vs official ACROSS SCALE -- PREFILL (8192 tok), 12 SM
+  One row per op; one column per node count. A percentage that shrinks
+  left-to-right is a win that does not survive scale-out.
+
+  op                    1N (offic. -> prs)    2N (offic. -> prs)    4N (offic. -> prs)
+  dispatch                  464->464 +0.0%      1053->1051 -0.2%      2024->2026 +0.1%
+  expanded dispatch         464->464 -0.1%      1049->1051 +0.3%      2024->2023 -0.1%
+  cached dispatch           470->471 +0.1%      1039->1040 +0.1%      2134->2132 -0.1%
+  combine                 1041->1042 +0.1%      2905->2904 -0.0%      4516->4509 -0.2%
+  reduced combine         1343->1342 -0.1%      3765->3772 +0.2%      4864->4876 +0.2%
+  layer total             1807->1806 -0.1%      4818->4823 +0.1%      6889->6902 +0.2%
+
+PR #1+#2 vs official ACROSS SCALE -- DECODE (128 tok), 12 SM
+  One row per op; one column per node count. A percentage that shrinks
+  left-to-right is a win that does not survive scale-out.
+
+  op                    1N (offic. -> prs)    2N (offic. -> prs)    4N (offic. -> prs)
+  dispatch                    26->26 +0.1%       292->131 -55.0%       319->183 -42.5%
+  expanded dispatch           26->26 +0.4%       293->130 -55.5%       319->182 -42.8%
+  cached dispatch             25->25 -0.4%       278->119 -57.2%       321->184 -42.6%
+  combine                     34->34 +0.4%        166->166 -0.3%        271->271 -0.2%
+  reduced combine             54->55 +1.4%        185->185 -0.2%        285->285 -0.1%
+  layer total                 80->81 +1.0%       477->316 -33.7%       604->468 -22.5%
+
+CLAMP CONTROL -- 128 tok, 12 SM: prs with EP_MIN_TOKENS_PER_PART=1
+  `d vs official` should be ~0: same geometry, different binary. A large
+  value there invalidates the PR #1+#2 column above.
+
+  op                 N      official        prs  prs mtpp1    d clamp d vs offic.
+  dispatch           1          26.0       26.0       26.0      -0.1%      +0.2%
+  expanded dispatch  1          25.9       26.0       25.9      +0.2%      +0.2%
+  cached dispatch    1          25.3       25.1       25.2      -0.2%      -0.3%
+  combine            1          33.6       33.7       33.6      +0.3%      +0.1%
+  reduced combine    1          54.4       55.2       54.8      +0.7%      +0.7%
+
+  dispatch           2         291.8      131.2      294.6     -55.5%      +0.9%
+  expanded dispatch  2         293.0      130.4      296.5     -56.0%      +1.2%
+  cached dispatch    2         277.7      118.9      280.2     -57.5%      +0.9%
+  combine            2         166.4      165.9      166.3      -0.2%      -0.0%
+  reduced combine    2         185.1      184.8      185.2      -0.2%      +0.1%
+
+  dispatch           4         318.8      183.4      318.4     -42.4%      -0.1%
+  expanded dispatch  4         318.9      182.3      318.1     -42.7%      -0.3%
+  cached dispatch    4         320.6      184.1      320.7     -42.6%      +0.0%
+  combine            4         270.9      270.5      270.7      -0.1%      -0.1%
+  reduced combine    4         285.3      285.0      285.2      -0.1%      -0.0%
+
+SM AXIS -- PREFILL (8192 tok), official arm: 24 vs 12 SM at each node count
+
+  op                 N       12sm us    24sm us          d   SU 12->24
+  dispatch           1         464.2      501.4      +8.0%   699 -> 647
+  expanded dispatch  1         464.4      501.1      +7.9%   699 -> 648
+  cached dispatch    1         470.3      504.5      +7.3%   690 -> 643
+  combine            1        1041.3      931.5     -10.5%   598 -> 669
+  reduced combine    1        1343.2     1055.2     -21.4%   464 -> 590
+  layer total        1        1807.5     1556.5     -13.9%
+
+  dispatch           2        1052.6      894.1     -15.1%   380 -> 447
+  expanded dispatch  2        1048.6      893.2     -14.8%   381 -> 448
+  cached dispatch    2        1038.6      862.4     -17.0%   385 -> 464
+  combine            2        2904.9     1849.3     -36.3%   264 -> 418
+  reduced combine    2        3765.2     2254.2     -40.1%   204 -> 341
+  layer total        2        4817.9     3148.3     -34.7%
+
+  dispatch           4        2024.2     2022.9      -0.1%   220 -> 220
+  expanded dispatch  4        2023.9     2022.9      -0.0%   220 -> 220
+  cached dispatch    4        2133.7     2138.6      +0.2%   208 -> 208
+  combine            4        4515.8     3971.7     -12.0%   191 -> 216
+  reduced combine    4        4864.4     3916.4     -19.5%   177 -> 220
+  layer total        4        6888.5     5939.2     -13.8%
+
+SM AXIS -- DECODE (128 tok), official arm: 24 vs 12 SM at each node count
+
+  op                 N       12sm us    24sm us          d   SU 12->24
+  dispatch           1          26.0       25.8      -0.4%   191 -> 192
+  expanded dispatch  1          25.9       25.8      -0.3%   191 -> 192
+  cached dispatch    1          25.3       25.3      +0.2%   197 -> 196
+  combine            1          33.6       31.9      -5.0%   284 -> 299
+  reduced combine    1          54.4       43.2     -20.6%   175 -> 220
+  layer total        1          80.4       69.1     -14.1%
+
+  dispatch           2         291.8      246.4     -15.6%   20 -> 24
+  expanded dispatch  2         293.0      247.0     -15.7%   20 -> 24
+  cached dispatch    2         277.7      226.9     -18.3%   21 -> 26
+  combine            2         166.4      159.8      -3.9%   68 -> 71
+  reduced combine    2         185.1      172.4      -6.9%   61 -> 65
+  layer total        2         476.9      418.8     -12.2%
+
+  dispatch           4         318.8      317.7      -0.3%   19 -> 19
+  expanded dispatch  4         318.9      319.9      +0.3%   19 -> 19
+  cached dispatch    4         320.6      313.9      -2.1%   19 -> 20
+  combine            4         270.9      279.1      +3.0%   44 -> 42
+  reduced combine    4         285.3      287.9      +0.9%   41 -> 41
+  layer total        4         604.1      605.6      +0.3%
+
+NODE LAYERING -- 2 nodes, 8192 tok, 12 SM: per-node mean us, official arm
+  spread = (max-min)/min across nodes WITHIN one rep. If it is large, a
+  single-node log could not have produced the numbers above.
+
+  op                 rep    per-node mean us (node1, node2, ...)
+  dispatch           1      1055.8  1054.0   spread 0.2%
+  dispatch           2      1058.1  1047.6   spread 1.0%
+  dispatch           3      1048.1  1052.0   spread 0.4%
+
+  combine            1      2903.5  2902.1   spread 0.0%
+  combine            2      2903.1  2908.8   spread 0.2%
+  combine            3      2906.5  2905.1   spread 0.0%
+
+  reduced combine    1      3761.4  3767.2   spread 0.2%
+  reduced combine    2      3764.9  3763.6   spread 0.0%
+  reduced combine    3      3765.9  3768.5   spread 0.1%
+
+NODE LAYERING -- 2 nodes, 128 tok, 12 SM: per-node mean us, official arm
+  spread = (max-min)/min across nodes WITHIN one rep. If it is large, a
+  single-node log could not have produced the numbers above.
+
+  op                 rep    per-node mean us (node1, node2, ...)
+  dispatch           1      290.6  293.2   spread 0.9%
+  dispatch           2      291.1  292.7   spread 0.5%
+  dispatch           3      289.4  294.1   spread 1.6%
+
+  combine            1      164.9  167.9   spread 1.8%
+  combine            2      165.1  167.5   spread 1.4%
+  combine            3      165.1  167.6   spread 1.5%
+
+  reduced combine    1      183.8  186.5   spread 1.5%
+  reduced combine    2      183.9  186.3   spread 1.3%
+  reduced combine    3      183.5  186.4   spread 1.6%
+
+NODE LAYERING -- 4 nodes, 8192 tok, 12 SM: per-node mean us, official arm
+  spread = (max-min)/min across nodes WITHIN one rep. If it is large, a
+  single-node log could not have produced the numbers above.
+
+  op                 rep    per-node mean us (node1, node2, ...)
+  dispatch           1      2030.4  2025.8  2026.2  2022.5   spread 0.4%
+  dispatch           2      2027.0  2016.9  2022.1  2018.4   spread 0.5%
+  dispatch           3      2031.4  2023.9  2019.9  2025.5   spread 0.6%
+
+  combine            1      4316.9  5190.1  4254.9  4256.6   spread 22.0%
+  combine            2      5188.2  4272.1  4292.4  4312.0   spread 21.4%
+  combine            3      5195.1  4278.1  4298.4  4335.2   spread 21.4%
+
+  reduced combine    1      4638.1  4633.0  4662.9  5530.4   spread 19.4%
+  reduced combine    2      4631.8  4633.2  4665.0  5514.1   spread 19.1%
+  reduced combine    3      4635.8  4644.4  4664.4  5519.6   spread 19.1%
+
+NODE LAYERING -- 4 nodes, 128 tok, 12 SM: per-node mean us, official arm
+  spread = (max-min)/min across nodes WITHIN one rep. If it is large, a
+  single-node log could not have produced the numbers above.
+
+  op                 rep    per-node mean us (node1, node2, ...)
+  dispatch           1      322.1  317.6  314.6  316.6   spread 2.4%
+  dispatch           2      322.0  314.7  313.7  315.6   spread 2.7%
+  dispatch           3      328.9  319.0  319.6  320.6   spread 3.1%
+
+  combine            1      256.1  265.7  269.7  291.5   spread 13.8%
+  combine            2      256.4  266.2  268.6  293.1   spread 14.3%
+  combine            3      260.5  269.8  265.4  288.0   spread 10.6%
+
+  reduced combine    1      270.9  280.6  283.7  307.4   spread 13.5%
+  reduced combine    2      271.0  280.3  283.5  305.9   spread 12.9%
+  reduced combine    3      273.0  281.8  281.6  304.0   spread 11.3%
+
+BYTES -- SU MB/rank per node count (official arm, 12 SM), the denominator
+  SU GB/s divides by: num_scaleup_bytes, i.e. bytes RECEIVED via scale-up.
+  --ignore-local-traffic is OFF, so nothing is subtracted from it. A GB/s
+  ratio across two columns here is a bytes ratio as much as a time ratio.
+
+  PREFILL (8192 tok)
+    op                    1N SU MB    2N SU MB    4N SU MB
+    dispatch                 324.6       399.8       444.9
+    expanded dispatch        324.6       399.8       444.9
+    cached dispatch          324.6       399.8       444.9
+    combine                  622.9       767.2       853.7
+    reduced combine          622.9       767.2       853.7
+
+  DECODE (128 tok)
+    op                    1N SU MB    2N SU MB    4N SU MB
+    dispatch                   5.0         5.9         6.1
+    expanded dispatch          5.0         5.9         6.1
+    cached dispatch            5.0         5.9         6.1
+    combine                    9.5        11.3        11.7
+    reduced combine            9.5        11.3        11.7
+
+AUDIT -- reps on disk and rank completeness (n must equal 8 x nodes)
+
+   8192tok official   1N 12sm qpdefault rep1:8/8 rep2:8/8 rep3:8/8
+   8192tok official   1N 24sm qpdefault rep1:8/8 rep2:8/8 rep3:8/8
+   8192tok PR #1+#2   1N 12sm prsdflt   rep1:8/8 rep2:8/8 rep3:8/8
+   8192tok official   2N 12sm qpdefault rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok official   2N 24sm qpdefault rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok PR #1+#2   2N 12sm prsdflt   rep1:16/16 rep2:16/16 rep3:16/16
+   8192tok official   4N 12sm qpdefault rep1:32/32 rep2:32/32 rep3:32/32
+   8192tok official   4N 24sm qpdefault rep1:32/32 rep2:32/32 rep3:32/32
+   8192tok PR #1+#2   4N 12sm prsdflt   rep1:32/32 rep2:32/32 rep3:32/32
+    128tok official   1N 12sm qpdefault rep1:8/8 rep2:8/8 rep3:8/8
+    128tok official   1N 24sm qpdefault rep1:8/8 rep2:8/8 rep3:8/8
+    128tok PR #1+#2   1N 12sm prsdflt   rep1:8/8 rep2:8/8 rep3:8/8
+    128tok PR #1+#2   1N 12sm prsmtpp1  rep1:8/8 rep2:8/8 rep3:8/8
+    128tok official   2N 12sm qpdefault rep1:16/16 rep2:16/16 rep3:16/16
+    128tok official   2N 24sm qpdefault rep1:16/16 rep2:16/16 rep3:16/16
+    128tok PR #1+#2   2N 12sm prsdflt   rep1:16/16 rep2:16/16 rep3:16/16
+    128tok PR #1+#2   2N 12sm prsmtpp1  rep1:16/16 rep2:16/16 rep3:16/16
+    128tok official   4N 12sm qpdefault rep1:32/32 rep2:32/32 rep3:32/32
+    128tok official   4N 24sm qpdefault rep1:32/32 rep2:32/32 rep3:32/32
+    128tok PR #1+#2   4N 12sm prsdflt   rep1:32/32 rep2:32/32 rep3:32/32
+    128tok PR #1+#2   4N 12sm prsmtpp1  rep1:32/32 rep2:32/32 rep3:32/32
+
+  no rep was excluded as an outlier.
+

@@ -1,0 +1,82 @@
+README table 1 -- time per doubling (official, 12 SM)
+  ok  dispatch 8192tok 1N us                                 464.24
+  ok  dispatch 8192tok 2N us                                1052.60
+  ok  dispatch 8192tok 4N us                                2024.16
+  ok  dispatch 8192tok 1N->2N x                                2.27
+  ok  dispatch 8192tok 2N->4N x                                1.92
+  ok  reduced combine 8192tok 1N us                         1343.25
+  ok  reduced combine 8192tok 2N us                         3765.25
+  ok  reduced combine 8192tok 4N us                         4864.39
+  ok  reduced combine 8192tok 1N->2N x                         2.80
+  ok  reduced combine 8192tok 2N->4N x                         1.29
+  ok  dispatch 128tok 1N us                                   25.96
+  ok  dispatch 128tok 2N us                                  291.85
+  ok  dispatch 128tok 4N us                                  318.75
+  ok  dispatch 128tok 1N->2N x                                11.24
+  ok  dispatch 128tok 2N->4N x                                 1.09
+  ok  reduced combine 128tok 1N us                            54.42
+  ok  reduced combine 128tok 2N us                           185.08
+  ok  reduced combine 128tok 4N us                           285.30
+  ok  reduced combine 128tok 1N->2N x                          3.40
+  ok  reduced combine 128tok 2N->4N x                          1.54
+README prose -- the decode floor is SM-invariant at 4N
+  ok  dispatch 128tok 4N 12sm us                             318.75
+  ok  dispatch 128tok 4N 24sm us                             317.71
+README table 2 -- PRs #1+#2 vs official across the node axis
+  ok  dispatch 128tok 1N official us                          25.96
+  ok  dispatch 128tok 1N prs us                               25.99
+  ok  dispatch 128tok 1N delta pct                             0.13
+  ok  dispatch 128tok 2N official us                         291.85
+  ok  dispatch 128tok 2N prs us                              131.22
+  ok  dispatch 128tok 2N delta pct                           -55.04
+  ok  dispatch 128tok 4N official us                         318.75
+  ok  dispatch 128tok 4N prs us                              183.37
+  ok  dispatch 128tok 4N delta pct                           -42.47
+  ok  layer 128tok 1N official us                             80.38
+  ok  layer 128tok 1N prs us                                  81.15
+  ok  layer 128tok 1N delta pct                                0.96
+  ok  layer 128tok 2N official us                            476.93
+  ok  layer 128tok 2N prs us                                 316.02
+  ok  layer 128tok 2N delta pct                              -33.74
+  ok  layer 128tok 4N official us                            604.05
+  ok  layer 128tok 4N prs us                                 468.37
+  ok  layer 128tok 4N delta pct                              -22.46
+  ok  layer 8192tok 1N official us                          1807.49
+  ok  layer 8192tok 1N prs us                               1806.04
+  ok  layer 8192tok 1N delta pct                              -0.08
+  ok  layer 8192tok 2N official us                          4817.85
+  ok  layer 8192tok 2N prs us                               4823.38
+  ok  layer 8192tok 2N delta pct                               0.11
+  ok  layer 8192tok 4N official us                          6888.54
+  ok  layer 8192tok 4N prs us                               6902.39
+  ok  layer 8192tok 4N delta pct                               0.20
+README prose -- at 1N the two arms are identical to within 1.4%
+  ok  worst |delta| over both tok and every op                 1.36
+README prose -- EP_MIN_TOKENS_PER_PART=1 lands on official
+  ok  clamp-off 2N us                                        294.57
+  ok  clamp-off 2N official us                               291.85
+  ok  clamp-off 2N vs official pct                             0.93
+  ok  clamp-off 4N us                                        318.38
+  ok  clamp-off 4N official us                               318.75
+  ok  clamp-off 4N vs official pct                            -0.12
+README prose -- what is left after the clamp still grows
+  ok  prs dispatch 128tok 2N->4N x                             1.40
+  ok  official dispatch 128tok 2N->4N x                        1.09
+README prose -- 24 SM keeps prefill at every scale, loses decode at 4N
+  ok  layer 8192tok 1N 12->24sm pct                          -13.88
+  ok  layer 8192tok 2N 12->24sm pct                          -34.65
+  ok  layer 8192tok 4N 12->24sm pct                          -13.78
+  ok  layer 128tok 1N 12->24sm pct                           -14.06
+  ok  layer 128tok 2N 12->24sm pct                           -12.20
+  ok  layer 128tok 4N 12->24sm pct                             0.25
+README prose -- 4N per-node spread and which node is slow
+  ok  prefill reduced combine 4N spread lo                    19.05
+  ok  prefill reduced combine 4N spread hi                    19.37
+  ok  prefill combine 4N spread lo                            21.43
+  ok  prefill combine 4N spread hi                            21.98
+  ok  decode combine 4N spread lo                             10.56
+  ok  decode combine 4N spread hi                             14.29
+  ok  prefill reduced combine slow node = 4, all reps           yes
+  ok  plain combine slow node differs from node4                yes
+
+every README number in the node-scaling section re-derives from logs/.
