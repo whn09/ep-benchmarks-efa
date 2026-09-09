@@ -73,6 +73,15 @@
 #   DRY=1          print the resolved matrix and the image inventory, run nothing.
 #   FORCE=1        run even if the preconditions below are not met. Every number
 #                  produced that way is suspect; there is no tag for it.
+#   RERUN=1        re-run cells that already have complete logs. Default OFF, i.e.
+#                  the campaign RESUMES: a cell whose log on EVERY node already
+#                  carries at least one `EP:` timing line is skipped. That is the
+#                  same completeness test the table generators apply, and it makes
+#                  re-issuing the identical command safe -- which matters because a
+#                  launcher can be killed mid-campaign, and re-running a finished
+#                  cell would overwrite a published log with a rerun that might
+#                  fail. Ports still advance per cell index either way, so a resumed
+#                  campaign uses the same port for the same cell.
 #   CELLS          override the matrix. One cell per line:
 #                    arm|image|tokens|num_sms|knobtag|extra env|prefer_overlap
 #                  `arm` and `knobtag` only name the log; `extra env` is passed
@@ -391,8 +400,34 @@ fi
 
 # ---------------------------------------------------------------- the runs ----
 port=$((PORT_BASE))
-ok=0; bad=0
+ok=0; bad=0; resumed=0
 declare -a TAGS=()
+
+# Which cells are ALREADY on disk, on EVERY node? Not the leader alone: combine is
+# layered by node, so a cell with only the leader's log is not a usable cell and must
+# be re-run. `EP:` is the completeness test rather than file existence, because an
+# interrupted cell leaves a log that has the banner and no timings.
+#
+# One ssh per NODE, not one per cell per node: the per-cell form cost ~35 s a cell on
+# these hosts (four TCP handshakes each), i.e. more than a quarter of the time it
+# takes to just run the cell. The scan is taken once, before the loop; cells finished
+# during this run are not in it and do not need to be, because the loop visits each
+# cell exactly once.
+DONE_LIST=""
+if [ "${RERUN:-}" != 1 ]; then
+  for ((i = 0; i < NNODES; i++)); do
+    DONE_LIST="$DONE_LIST
+$($SSH_N "${NODE_ARR[$i]}" \
+    "grep -l 'EP:' $LOGDIR/*.node$((i + 1)).log 2>/dev/null || true" 2>/dev/null \
+  | sed -e 's#.*/##' -e 's#\.node[0-9]*\.log$##')"
+  done
+fi
+
+done_on_all () {   # $1 tag -- complete on all NNODES nodes per the pre-run scan
+  local n
+  n=$(printf '%s\n' "$DONE_LIST" | grep -cxF "$1" || true)
+  [ "${n:-0}" -ge "$NNODES" ]
+}
 
 cell () {   # $1 arm  $2 image  $3 tokens  $4 sms  $5 knobtag  $6 extra env  $7 rep  $8 ovlp
   local arm=$1 img=$2 tok=$3 sms=$4 knob=$5 extra=$6 rep=$7 ovlp=${8:-$PREFER_OVERLAP}
@@ -418,6 +453,13 @@ cell () {   # $1 arm  $2 image  $3 tokens  $4 sms  $5 knobtag  $6 extra env  $7 
   env="IMAGE=$img WORLD_SIZE=$NNODES NUM_PROCESSES=$NUM_PROCESSES TOKENS=$tok \
 NUM_SMS=$sms MASTER_PORT=$port IGNORE_LOCAL='$IGNORE_LOCAL' NCCL_DEBUG=WARN TEST_FIRST_ONLY=1 \
 PREFER_OVERLAP=$ovlp GIN_ENV='$GIN_ENV' EXTRA_ENV='$extra'"
+
+  if [ "${RERUN:-}" != 1 ] && done_on_all "$tag"; then
+    resumed=$((resumed + 1))
+    TAGS+=("$tag")
+    echo "=== $tag  -- already complete on all $NNODES nodes, not re-run (RERUN=1 to redo)"
+    return
+  fi
 
   echo "=== $tag  (port $port)"
   pids=()
@@ -449,7 +491,7 @@ for rep in $(seq 1 "$REPS"); do
 done
 
 echo
-echo "=== cells ok=$ok bad=$bad skipped=$skipped"
+echo "=== cells ok=$ok bad=$bad skipped=$skipped already-on-disk=$resumed"
 echo "=== fetch and check (every node writes its OWN logs -- combine is layered by"
 echo "    node, so a table built from the leader alone is wrong):"
 # LOGDIR is kept unexpanded ($HOME/...) because it is evaluated by the remote
