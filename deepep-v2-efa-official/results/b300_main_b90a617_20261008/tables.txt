@@ -1,0 +1,158 @@
+amazon-contributing/DeepEP main @ b90a617 on b300, against the best earlier b300 arms.
+
+CONFIG -- read out of the logs
+  arm                             SM   tok  BUILD_REF                                  #SM/#QPs  reps
+  main b90a617 (new)              12  8192  b90a61714ac48713408d8c62b6912d66daabb9a0   12/11/11  3
+  main b90a617 (new)              12   128  b90a61714ac48713408d8c62b6912d66daabb9a0   12/11/11  3
+  main 54fffef (old)              12  8192  54fffeff810723f574c574b1790dff189f3c6ffb   12/11/11  3
+  main 54fffef (old)              12   128  54fffeff810723f574c574b1790dff189f3c6ffb   12/11/11  3
+  PR #1+#2 (old)                  12  8192  bfbdd15ff448783f877cb2210cb3246c8452b05e   12/11/11  3
+  PR #1+#2 (old)                  12   128  bfbdd15ff448783f877cb2210cb3246c8452b05e   12/11/11  3
+  stack #1+#2+#8+#9 (old best)    12  8192  a35285f0af98856625e542df24bd17a985bc05d9   12/13/13  3
+  stack #1+#2+#8+#9 (old best)    12   128  a35285f0af98856625e542df24bd17a985bc05d9   12/13/13  3
+  main b90a617 (new)              24  8192  b90a61714ac48713408d8c62b6912d66daabb9a0   24/11/11  3
+  main b90a617 (new)              24   128  b90a61714ac48713408d8c62b6912d66daabb9a0   24/11/11  3
+  main 54fffef (old)              24  8192  54fffeff810723f574c574b1790dff189f3c6ffb   24/11/11  1
+  main 54fffef (old)              24   128  54fffeff810723f574c574b1790dff189f3c6ffb   24/11/11  1
+  PR #1+#2 (old)                  24  8192  bfbdd15ff448783f877cb2210cb3246c8452b05e   24/11/11  1
+  PR #1+#2 (old)                  24   128  bfbdd15ff448783f877cb2210cb3246c8452b05e   24/11/11  1
+  stack #1+#2+#8+#9 (old best)    24  8192  a35285f0af98856625e542df24bd17a985bc05d9   24/13/13  1
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0
+  d = new main relative to that row (negative = new main is faster)
+  op                arm                                   us     new d  SO GB/s   per-rep us
+  ----------------------------------------------------------------------------------------------------
+  dispatch          main b90a617 (new)                1050.5                116   1050.1 / 1050.2 / 1051.2
+                    main 54fffef (old)                1056.2     -0.5%      116   1055.4 / 1056.8 / 1056.4
+                    PR #1+#2 (old)                    1054.9     -0.4%      116   1055.2 / 1052.0 / 1057.6
+                    stack #1+#2+#8+#9 (old best)       947.8    +10.8%      129   947.6 / 947.9 / 948.0
+
+  expanded dispatch main b90a617 (new)                1047.6                117   1047.4 / 1047.8 / 1047.8
+                    main 54fffef (old)                1054.0     -0.6%      116   1053.7 / 1055.3 / 1052.9
+                    PR #1+#2 (old)                    1053.5     -0.6%      116   1053.4 / 1052.0 / 1054.9
+                    stack #1+#2+#8+#9 (old best)       946.1    +10.7%      129   946.5 / 945.8 / 946.1
+
+  cached dispatch   main b90a617 (new)                1036.8                118   1037.4 / 1037.0 / 1036.1
+                    main 54fffef (old)                1042.2     -0.5%      117   1041.8 / 1042.4 / 1042.5
+                    PR #1+#2 (old)                    1042.3     -0.5%      117   1042.1 / 1043.2 / 1041.6
+                    stack #1+#2+#8+#9 (old best)       940.3    +10.3%      130   939.8 / 940.5 / 940.5
+
+  combine           main b90a617 (new)                2868.9                 82   2865.8 / 2867.9 / 2872.9
+                    main 54fffef (old)                2927.4     -2.0%       80   2930.2 / 2927.5 / 2924.5
+                    PR #1+#2 (old)                    2924.5     -1.9%       80   2927.0 / 2922.9 / 2923.5
+                    stack #1+#2+#8+#9 (old best)      2816.0     +1.9%       83   2813.9 / 2813.4 / 2820.7
+
+  reduced combine   main b90a617 (new)                3724.9                 63   3724.6 / 3717.7 / 3732.3
+                    main 54fffef (old)                3811.2     -2.3%       62   3815.9 / 3814.9 / 3802.9
+                    PR #1+#2 (old)                    3804.6     -2.1%       62   3802.9 / 3803.9 / 3807.0
+                    stack #1+#2+#8+#9 (old best)      3545.7     +5.1%       66   3549.1 / 3546.5 / 3541.5
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, 12 SM, GIN type 5, ovlp=0
+  d = new main relative to that row (negative = new main is faster)
+  op                arm                                   us     new d  SO GB/s   per-rep us
+  ----------------------------------------------------------------------------------------------------
+  dispatch          main b90a617 (new)                 129.5                 14   129.3 / 129.3 / 129.8
+                    main 54fffef (old)                 277.5    -53.3%        6   277.1 / 277.4 / 277.9
+                    PR #1+#2 (old)                     127.8     +1.3%       14   128.3 / 127.2 / 127.9
+                    stack #1+#2+#8+#9 (old best)       118.1     +9.6%       15   118.5 / 117.8 / 118.0
+
+  expanded dispatch main b90a617 (new)                 129.6                 14   129.7 / 130.0 / 129.1
+                    main 54fffef (old)                 278.0    -53.4%        6   278.6 / 278.3 / 277.1
+                    PR #1+#2 (old)                     127.6     +1.6%       14   127.0 / 127.8 / 127.9
+                    stack #1+#2+#8+#9 (old best)       118.8     +9.1%       15   119.3 / 118.7 / 118.5
+
+  cached dispatch   main b90a617 (new)                 118.9                 15   118.5 / 119.2 / 119.1
+                    main 54fffef (old)                 262.7    -54.7%        7   262.0 / 263.1 / 263.2
+                    PR #1+#2 (old)                     115.6     +2.9%       16   115.6 / 115.7 / 115.6
+                    stack #1+#2+#8+#9 (old best)       110.6     +7.5%       16   110.8 / 110.3 / 110.7
+
+  combine           main b90a617 (new)                 163.4                 21   163.5 / 163.4 / 163.2
+                    main 54fffef (old)                 162.4     +0.6%       21   162.3 / 162.4 / 162.5
+                    PR #1+#2 (old)                     162.2     +0.8%       21   162.1 / 162.1 / 162.3
+                    stack #1+#2+#8+#9 (old best)       160.2     +2.0%       22   160.3 / 160.2 / 160.3
+
+  reduced combine   main b90a617 (new)                 181.6                 19   181.5 / 181.6 / 181.6
+                    main 54fffef (old)                 180.6     +0.5%       19   180.6 / 180.5 / 180.6
+                    PR #1+#2 (old)                     180.5     +0.6%       19   180.3 / 180.7 / 180.6
+                    stack #1+#2+#8+#9 (old best)       168.3     +7.9%       21   168.3 / 168.6 / 168.1
+
+LAYER -- dispatch + reduced combine, 12 SM (us)
+   8192 tok  main b90a617 (new)                4775.4
+   8192 tok  main 54fffef (old)                4867.4
+   8192 tok  PR #1+#2 (old)                    4859.5
+   8192 tok  stack #1+#2+#8+#9 (old best)      4493.5
+    128 tok  main b90a617 (new)                 311.0
+    128 tok  main 54fffef (old)                 458.1
+    128 tok  PR #1+#2 (old)                     308.3
+    128 tok  stack #1+#2+#8+#9 (old best)       286.4
+
+PREFILL -- 8192 tok, 2 nodes / 16 ranks, 24 SM, GIN type 5, ovlp=0
+  d = new main relative to that row (negative = new main is faster)
+  op                arm                                   us     new d  SO GB/s   per-rep us
+  ----------------------------------------------------------------------------------------------------
+  dispatch          main b90a617 (new)                 891.6                137   889.8 / 891.3 / 893.7
+                    main 54fffef (old)                 896.7     -0.6%      136   896.7
+                    PR #1+#2 (old)                     896.0     -0.5%      136   896.0
+                    stack #1+#2+#8+#9 (old best)       872.1     +2.2%      140   872.1
+
+  expanded dispatch main b90a617 (new)                 888.0                137   886.8 / 887.2 / 890.2
+                    main 54fffef (old)                 893.1     -0.6%      137   893.1
+                    PR #1+#2 (old)                     893.4     -0.6%      137   893.4
+                    stack #1+#2+#8+#9 (old best)       873.0     +1.7%      140   873.0
+
+  cached dispatch   main b90a617 (new)                 859.8                142   859.3 / 859.8 / 860.4
+                    main 54fffef (old)                 863.2     -0.4%      142   863.2
+                    PR #1+#2 (old)                     863.9     -0.5%      142   863.9
+                    stack #1+#2+#8+#9 (old best)       912.4     -5.8%      134   912.4
+
+  combine           main b90a617 (new)                1836.0                129   1834.1 / 1838.4 / 1835.5
+                    main 54fffef (old)                1851.7     -0.8%      128   1851.7
+                    PR #1+#2 (old)                    1851.8     -0.9%      127   1851.8
+                    stack #1+#2+#8+#9 (old best)      1689.3     +8.7%      139   1689.3
+
+  reduced combine   main b90a617 (new)                2235.9                105   2242.4 / 2233.1 / 2232.2
+                    main 54fffef (old)                2254.8     -0.8%      104   2254.8
+                    PR #1+#2 (old)                    2253.4     -0.8%      104   2253.4
+                    stack #1+#2+#8+#9 (old best)      1953.9    +14.4%      120   1953.9
+
+DECODE -- 128 tok, 2 nodes / 16 ranks, 24 SM, GIN type 5, ovlp=0
+  d = new main relative to that row (negative = new main is faster)
+  op                arm                                   us     new d  SO GB/s   per-rep us
+  ----------------------------------------------------------------------------------------------------
+  dispatch          main b90a617 (new)                 152.3                 12   152.3 / 152.2 / 152.2
+                    main 54fffef (old)                 247.3    -38.4%        7   247.3
+                    PR #1+#2 (old)                     152.7     -0.3%       12   152.7
+                    stack #1+#2+#8+#9 (old best)           -         -        -   
+
+  expanded dispatch main b90a617 (new)                 151.8                 12   151.6 / 151.1 / 152.7
+                    main 54fffef (old)                 247.4    -38.7%        7   247.4
+                    PR #1+#2 (old)                     153.5     -1.1%       12   153.5
+                    stack #1+#2+#8+#9 (old best)           -         -        -   
+
+  cached dispatch   main b90a617 (new)                 139.1                 13   138.8 / 139.1 / 139.3
+                    main 54fffef (old)                 228.2    -39.1%        8   228.2
+                    PR #1+#2 (old)                     139.0     +0.0%       13   139.0
+                    stack #1+#2+#8+#9 (old best)           -         -        -   
+
+  combine           main b90a617 (new)                 159.5                 22   159.6 / 159.7 / 159.3
+                    main 54fffef (old)                 159.7     -0.1%       22   159.7
+                    PR #1+#2 (old)                     159.9     -0.2%       21   159.9
+                    stack #1+#2+#8+#9 (old best)           -         -        -   
+
+  reduced combine   main b90a617 (new)                 172.5                 20   172.6 / 172.3 / 172.5
+                    main 54fffef (old)                 172.6     -0.1%       20   172.6
+                    PR #1+#2 (old)                     172.4     +0.1%       20   172.4
+                    stack #1+#2+#8+#9 (old best)           -         -        -   
+
+LAYER -- dispatch + reduced combine, 24 SM (us)
+   8192 tok  main b90a617 (new)                3127.5
+   8192 tok  main 54fffef (old)                3151.5
+   8192 tok  PR #1+#2 (old)                    3149.5
+   8192 tok  stack #1+#2+#8+#9 (old best)      2826.1
+    128 tok  main b90a617 (new)                 324.7
+    128 tok  main 54fffef (old)                 419.9
+    128 tok  PR #1+#2 (old)                     325.1
+    128 tok  stack #1+#2+#8+#9 (old best)           -
+
+AUDIT
+  done.
