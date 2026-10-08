@@ -51,11 +51,15 @@ fi
 TAG="${TAG:-deepep-v2-efa-official:${ARCH}-stack${REF_A:0:7}x${REF_B:0:7}}"
 
 echo "=== $TAG = $BASE + merge($REF_B)"
+# STACK_MARKERS (env) overrides the Dockerfile's content gate -- the default is the
+# #1+#2 x #8+#9 set, which a different pair of PRs cannot pass. Give at least one
+# marker per side; see the Dockerfile.stack comment for the syntax.
 docker build -f Dockerfile.stack -t "$TAG" \
-  --build-arg "BASE=$BASE" --build-arg "REF_A=$REF_A" --build-arg "REF_B=$REF_B" .
+  --build-arg "BASE=$BASE" --build-arg "REF_A=$REF_A" --build-arg "REF_B=$REF_B" \
+  ${STACK_MARKERS:+--build-arg "STACK_MARKERS=$STACK_MARKERS"} .
 
 # What actually got installed, printed once so it lands in the build log next to the
-# tag. The four content assertions are inside the Dockerfile (a failing build is a
+# tag. The content assertions (STACK_MARKERS) are inside the Dockerfile (a failing build is a
 # louder signal than a line in a log nobody reads).
 docker run --rm --entrypoint cat "$TAG" /opt/DeepEP/BUILD_REF
 docker run --rm --entrypoint cat "$TAG" /opt/DeepEP/BUILD_REF_PARENTS

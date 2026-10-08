@@ -57,20 +57,26 @@ RUN set -eux; \
 #   - EP_NUM_SUB_PARTS 是 PR #1 往 JIT 转发 env 的那段，编进 _C.so；
 #   - #9 改的 combine 头文件是 JIT 在运行时读的，必须在 installed package 的 include 下。
 # 任一条不成立就让 build 失败，而不是产出一个安静地只带一半补丁的镜像。
+# STACK_MARKERS：空格分隔的 `<where>:<regex>`，<where> 是 `so`（_C.so 的 strings）或
+# installed package 下 include/deep_ep/ 的相对路径。默认值是 #1+#2 x #8+#9 那一组：
+#   so:EP_NUM_SUB_PARTS                                      -> PR #1 的 JIT env 转发（host 侧，编进 so）
+#   impls/hybrid_dispatch_unordered.cuh:kMinTokensPerPart    -> PR #2 的 part clamp（device 侧，JIT 运行时读）
+#   impls/hybrid_combine_unordered.cuh:kNumFwWarpsPerChannel -> PR #8+#9 的 forward-warp 配对
+#   common/gin_resource_alloc.cuh:kDefaultGinContextCnt *= *13 -> PR #9 的 QP bump（日志里会印成 #QPs 13/13）
+# 别的 stack 由 build_stack_image.sh 的 STACK_MARKERS 传一组自己的，每支至少一条。
+# 检查的是 **installed package** 下的 include，而不是 /opt/DeepEP 的源码树：JIT 编的是
+# 前者，源码树对不对不决定跑的是什么。regex 里不能有空格，用 `[[:space:]]*`（别用 `\s`：Dockerfile 会吃掉反斜杠）。
+ARG STACK_MARKERS="so:EP_NUM_SUB_PARTS impls/hybrid_dispatch_unordered.cuh:kMinTokensPerPart impls/hybrid_combine_unordered.cuh:kNumFwWarpsPerChannel common/gin_resource_alloc.cuh:kDefaultGinContextCnt[[:space:]]*=[[:space:]]*13"
 RUN set -eux; \
     PKG="$(python3 -c 'import deep_ep, os; print(os.path.dirname(deep_ep.__file__))')"; \
     echo "installed deep_ep at $PKG"; \
     python3 -c 'import deep_ep, deep_ep._C'; \
     SO="$(find "$PKG" -maxdepth 1 -name '_C*.so' | head -1)"; test -n "$SO"; \
-    strings "$SO" | grep -q EP_NUM_SUB_PARTS; \
-    grep -rq 'kMinTokensPerPart' "$PKG/include/deep_ep/impls/hybrid_dispatch_unordered.cuh"; \
-    grep -rq 'kNumFwWarpsPerChannel' "$PKG/include/deep_ep/impls/hybrid_combine_unordered.cuh"; \
-    grep -q 'kDefaultGinContextCnt *= *13' "$PKG/include/deep_ep/common/gin_resource_alloc.cuh"; \
+    test -n "$STACK_MARKERS"; \
+    for m in $STACK_MARKERS; do \
+      where="${m%%:*}"; re="${m#*:}"; \
+      if [ "$where" = so ]; then strings "$SO" | grep -Eq "$re"; \
+      else grep -Eq "$re" "$PKG/include/deep_ep/$where"; fi; \
+      echo "marker ok: $m"; \
+    done; \
     test -s /opt/DeepEP/BUILD_REF_PARENTS
-# 四条 assert 分别对应四组改动，缺哪一半都 build 失败：
-#   EP_NUM_SUB_PARTS 在 _C.so 里            -> PR #1 的 JIT env 转发（host 侧，编进 so）
-#   kMinTokensPerPart 在 dispatch 头文件里  -> PR #2 的 part clamp（device 侧，JIT 运行时读）
-#   kNumFwWarpsPerChannel 在 combine 头里   -> PR #8+#9 的 forward-warp 配对
-#   kDefaultGinContextCnt = 13              -> PR #9 的 QP bump（日志里会印成 #QPs 13/13）
-# 检查的是 **installed package** 下的 include，而不是 /opt/DeepEP 的源码树：JIT 编的是
-# 前者，源码树对不对不决定跑的是什么。
