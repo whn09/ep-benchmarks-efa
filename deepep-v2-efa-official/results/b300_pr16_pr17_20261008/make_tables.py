@@ -118,7 +118,32 @@ def audit():
     print("  done.")
 
 
+def md_vs_main(arm_prefix):
+    """markdown table of one in-campaign arm vs main, for a PR comment (pasted verbatim)"""
+    label = [a[0] for a in ARMS if a[2] == arm_prefix][0]
+    print("| tokens | op | main b90a617 (us) | %s (us) | delta |" % label)
+    print("|---|---|---:|---:|---:|")
+    for tok in (8192, 128):
+        for op in ("dispatch", "combine", "reduced combine"):
+            b, a = us(NEW, "mainb90a617", tok, op), us(NEW, arm_prefix, tok, op)
+            print("| %d | %s | %s | %s | %s |" % (tok, op, f(b), f(a), pct(a, b)))
+        bl = us(NEW, "mainb90a617", tok, "dispatch") + us(NEW, "mainb90a617", tok, "reduced combine")
+        al = us(NEW, arm_prefix, tok, "dispatch") + us(NEW, arm_prefix, tok, "reduced combine")
+        print("| %d | dispatch + reduced combine | %s | %s | %s |" % (tok, f(bl), f(al), pct(al, bl)))
+    print()
+    print("Per-rep %s (us), all 16 ranks pooled per rep:" % label)
+    for tok in (8192, 128):
+        for op in ("dispatch", "combine"):
+            for name, arm in (("main", "mainb90a617"), (label, arm_prefix)):
+                kept = NEW.stat(reps(NEW, arm, tok), op)[1]
+                print("- %d tok %s, %s: %s" % (tok, op, name, " / ".join(f(v) for v in kept)))
+
+
 if __name__ == "__main__":
+    import sys
+    if len(sys.argv) == 3 and sys.argv[1] == "--md":
+        md_vs_main(sys.argv[2])
+        sys.exit(0)
     print(__doc__.split("\n")[0])
     print()
     config()
