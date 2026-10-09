@@ -1,0 +1,83 @@
+diff --git a/deep_ep/include/deep_ep/common/comm.cuh b/deep_ep/include/deep_ep/common/comm.cuh
+index 5cbb9e0..24bdac8 100644
+--- a/deep_ep/include/deep_ep/common/comm.cuh
++++ b/deep_ep/include/deep_ep/common/comm.cuh
+@@ -238,6 +238,14 @@ __forceinline__ __device__ void gin_barrier_wo_local_sync(
+                 }
+                 return false;
+             });
++            if constexpr (std::is_same_v<team_t, ncclTeamTagRail>) {
++                const auto after = gin.readSignal(signal_idx, 64, cuda::memory_order_acquire);
++                if (after > target)
++                    printf("EP_PROBE barrier_overcount tag=%d so=%d su=%d slot=%d signal=%lu target=%lu excess=%lu\n",
++                           kTag, scaleout_rank_idx, scaleup_rank_idx, static_cast<int>(signal_idx),
++                           static_cast<unsigned long>(after), static_cast<unsigned long>(target),
++                           static_cast<unsigned long>(after - target));
++            }
+         }
+     }
+ }
+diff --git a/deep_ep/include/deep_ep/impls/hybrid_dispatch_unordered.cuh b/deep_ep/include/deep_ep/impls/hybrid_dispatch_unordered.cuh
+index 816f057..85c1100 100644
+--- a/deep_ep/include/deep_ep/impls/hybrid_dispatch_unordered.cuh
++++ b/deep_ep/include/deep_ep/impls/hybrid_dispatch_unordered.cuh
+@@ -809,6 +809,7 @@ hybrid_unordered_dispatch_impl(
+         int recv_scaleout_rank_idx = channel_idx % kNumScaleoutRanks;
+         int stored_terminal_part = -1;
+         int stored_terminal_sub = -1;
++        uint32_t probe_reported = 0;
+         uint32_t wip_mask;
+         while ((wip_mask = ptx::gather(stored_scaleout_tail_idx > stored_scaleout_old_tail_idx or stored_finish_flag == 0))) {
+             // Pick next rank in round-robin
+@@ -871,6 +872,13 @@ hybrid_unordered_dispatch_impl(
+                         }
+                     }
+                     const bool part_landed = landed >= static_cast<int64_t>(num_valid);
++                    if (landed > static_cast<int64_t>(num_valid) and lane_idx == 0 and
++                        not (probe_reported & (1u << k))) {
++                        probe_reported |= (1u << k);
++                        printf("EP_PROBE foreign_increment iter=%d so=%d su=%d channel=%d part=%d landed=%lld num_valid=%d\n",
++                               dispatch_iteration, scaleout_rank_idx, scaleup_rank_idx, channel_idx, k,
++                               static_cast<long long>(landed), num_valid);
++                    }
+ 
+                     #pragma unroll
+                     for (int s = 0; s < kNumSubParts; ++ s) {
+@@ -994,6 +1002,22 @@ hybrid_unordered_dispatch_impl(
+                 }
+                 __syncwarp();
+ 
++                if constexpr (kReuseSlotIndices) {
++                    const bool master_now = ptx::deduplicate(stored_dst_scaleup_rank_idx, lane_idx) and
++                                            stored_dst_scaleup_rank_idx >= 0;
++                    const bool inconsistent = lane_idx < kNumTopk and ((stored_dst_slot_idx >= 0) != master_now);
++                    const auto bad_mask = ptx::gather(inconsistent);
++                    const auto fatal_mask = ptx::gather(stored_dst_slot_idx >= 0 and stored_dst_scaleup_rank_idx < 0);
++                    if (bad_mask != 0 and lane_idx == 0)
++                        printf("EP_PROBE stale_payload iter=%d so=%d su=%d channel=%d src=%d slot_idx=%d bad_lanes=0x%x fatal_lanes=0x%x src_token=%d\n",
++                               dispatch_iteration, scaleout_rank_idx, scaleup_rank_idx, channel_idx,
++                               recv_scaleout_rank_idx, slot_idx, bad_mask, fatal_mask,
++                               tma_buffer.get_src_token_global_idx_ptr()[0]);
++                    if (stored_dst_slot_idx >= 0 and stored_dst_scaleup_rank_idx < 0)
++                        stored_dst_slot_idx = -1;
++                    __syncwarp();
++                }
++
+                 // Issue TMAs
+                 if (stored_dst_slot_idx >= 0) {
+                     const auto dst_ptr = gin.get_sym_ptr<ncclTeamTagLsa>(
+@@ -1077,6 +1101,14 @@ hybrid_unordered_dispatch_impl(
+                                channel_idx, k, (long long)landed, expected_k);
+                     return false;
+                 });
++                {
++                    const int64_t landed =
++                        static_cast<int64_t>(gin.gin.readSignal(part_signal_id(k))) - rx_part_base[k];
++                    if (landed > static_cast<int64_t>(expected_k))
++                        printf("EP_PROBE data_overcount iter=%d so=%d su=%d channel=%d part=%d landed=%lld expected=%d\n",
++                               dispatch_iteration, scaleout_rank_idx, scaleup_rank_idx, channel_idx, k,
++                               static_cast<long long>(landed), expected_k);
++                }
+                 gin.gin.increaseSignalShadow(part_signal_id(k), static_cast<uint64_t>(expected_k));
+             }
+         }

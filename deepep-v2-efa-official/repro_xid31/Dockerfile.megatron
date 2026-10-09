@@ -1,0 +1,71 @@
+# Megatron-LM `dev` (the only branch with the DeepEP v2 `deepepv2` flex backend, PR #4793)
+# layered on the DeepEP image the stress test uses, so NCCL 2.31.2 / EFA 1.50.0 / DeepEP are
+# byte-identical to it and only Megatron + TransformerEngine are new.
+#
+#   docker build -f repro_xid31/Dockerfile.megatron \
+#     --build-arg BASE=deepep-v2-efa-official:sm100-874779c \
+#     --build-arg MEGATRON_REF=<40-char sha on NVIDIA/Megatron-LM dev> \
+#     -t deepep-v2-efa-official:sm100-874779c-mlm<sha7> .
+#
+# TE is required, not optional: the target recipe runs `--moe-permute-fusion`, and dev's
+# TransformerConfig raises "fused permutation is not available. Please install TE >= 2.1.0"
+# without it. TE's PyTorch extension is compiled here against the base image's torch.
+ARG BASE=deepep-v2-efa-official:sm100-874779c
+FROM ${BASE}
+
+ARG TE_VERSION=2.20.2
+# ap-south-2 -> files.pythonhosted.org times out mid-way through the 276 MB TE core wheel
+ENV PIP_DEFAULT_TIMEOUT=300 PIP_RETRIES=10
+ARG NVTE_CUDA_ARCHS=100
+RUN pip3 install --break-system-packages --no-cache-dir \
+        pybind11 einops sentencepiece tiktoken regex nltk packaging wheel setuptools \
+        "transformers<5" tensorboard pyyaml flask-restful onnx \
+ && NV="$(python3 -c 'import nvidia, os; print(list(nvidia.__path__)[0])')" \
+ && test -f "$NV/nccl/include/nccl.h" && test -f "$NV/cudnn/include/cudnn.h" \
+ && for so in "$NV"/cudnn/lib/libcudnn*.so.9 "$NV"/nccl/lib/libnccl.so.2; do ln -sf "$(basename "$so")" "${so%.so.*}.so"; done \
+ && CUDNN_PATH="$NV/cudnn" CUDNN_HOME="$NV/cudnn" \
+    CPLUS_INCLUDE_PATH="$NV/nccl/include:$NV/cudnn/include:${CPLUS_INCLUDE_PATH:-}" \
+    C_INCLUDE_PATH="$NV/nccl/include:$NV/cudnn/include:${C_INCLUDE_PATH:-}" \
+    LIBRARY_PATH="$NV/nccl/lib:$NV/cudnn/lib:${LIBRARY_PATH:-}" \
+    NVTE_FRAMEWORK=pytorch NVTE_CUDA_ARCHS=${NVTE_CUDA_ARCHS} MAX_JOBS=96 \
+    pip3 install --break-system-packages --no-cache-dir --no-build-isolation \
+        "transformer_engine[pytorch,core-cu13]==${TE_VERSION}" \
+ && pip3 list 2>/dev/null | grep -i "^transformer.engine" \
+ && ! pip3 list 2>/dev/null | grep -qi "transformer.engine.cu12"
+# nccl.h / cudnn.h: the base image removed the apt libnccl-dev (2.28.3, no GIN) on purpose and
+# never had apt cuDNN, so the only headers are the pip nvidia-nccl-cu13 2.31.2 / nvidia-cudnn-cu13
+# ones torch itself loads. The pip wheels ship only versioned .so files, hence the dev symlinks.
+# The `core` extra would pull the cu12 core library next to a cu13 torch -- hence `core-cu13`
+# and the negative check. No `import` checks in this file: there is no GPU in `docker build`,
+# and both deep_ep and transformer_engine.pytorch need libcuda at import time.
+
+# TE 2.20.2's dependency pins silently DOWNGRADE the base image's nvidia-nccl-cu13 2.31.2 -> 2.29.7
+# and nvidia-nvshmem-cu13 3.7.2 -> 3.4.5. The NVSHMEM one breaks `import deep_ep` (_C.so:
+# undefined symbol nvshmem_selected_device_transport) and Megatron then reports "DeepEP v2 is not
+# installed"; the NCCL one would put DeepEP on a GIN-less NCCL. Put the base image's pair back.
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps --force-reinstall \
+        "nvidia-nccl-cu13==2.31.2" "nvidia-nvshmem-cu13==3.7.2" \
+ && NV="$(python3 -c 'import nvidia, os; print(list(nvidia.__path__)[0])')" \
+ && ln -sf libnccl.so.2 "$NV/nccl/lib/libnccl.so" \
+ && pip3 list 2>/dev/null | grep -E "^nvidia-nccl-cu13 +2\.31\.2$" \
+ && pip3 list 2>/dev/null | grep -E "^nvidia-nvshmem-cu13 +3\.7\.2$" \
+ && pip3 list 2>/dev/null | grep -E "^torch +2\.13\.0\+cu130$"
+
+ARG MEGATRON_REF
+ADD https://api.github.com/repos/NVIDIA/Megatron-LM/commits/${MEGATRON_REF} /tmp/mlm-ref.json
+RUN test -n "$MEGATRON_REF" \
+ && mkdir -p /opt/Megatron-LM && cd /opt/Megatron-LM && git init -q \
+ && git remote add origin https://github.com/NVIDIA/Megatron-LM.git \
+ && git fetch -q --depth 1 origin "$MEGATRON_REF" && git checkout -q FETCH_HEAD \
+ && git rev-parse HEAD > /opt/Megatron-LM/BUILD_REF \
+ && grep -q "class DeepepV2Combine" megatron/core/transformer/moe/fused_a2a.py \
+ && grep -rq "class ElasticBuffer" "$(python3 -c 'import importlib.util as u, os; print(os.path.dirname(u.find_spec("deep_ep").origin))')" \
+ && make -C megatron/core/datasets \
+ && ls megatron/core/datasets/helpers_cpp*.so \
+ && echo "megatron $(cat /opt/Megatron-LM/BUILD_REF): deepepv2 backend + deep_ep.ElasticBuffer present"
+# helpers_cpp: Megatron compiles it lazily on global rank 0 only, so with one --rm container per
+# node every other node fails with "No module named megatron.core.datasets.helpers_cpp".
+COPY repro_xid31/mlm_warm_ep_group.py /tmp/mlm_warm_ep_group.py
+RUN python3 /tmp/mlm_warm_ep_group.py /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py \
+ && grep -q "repro_xid31: create the EP group" /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py
+ENV PYTHONPATH=/opt/Megatron-LM

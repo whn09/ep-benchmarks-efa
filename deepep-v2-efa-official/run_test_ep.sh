@@ -268,6 +268,7 @@ docker run --rm --init \
   --ulimit memlock=-1 --ulimit stack=67108864 \
   --device=/dev/infiniband --device=/dev/gdrdrv \
   -v /sys/class/infiniband:/sys/class/infiniband:ro \
+  ${EXTRA_MOUNT:+-v $EXTRA_MOUNT:$EXTRA_MOUNT} \
   -e MASTER_ADDR="${MASTER_IP}" \
   -e MASTER_PORT="${MASTER_PORT}" \
   -e WORLD_SIZE="${WORLD_SIZE}" \
@@ -287,12 +288,16 @@ docker run --rm --init \
   -e PYTHONFAULTHANDLER=1 \
   "${IMAGE}" \
   bash -lc "timeout -s ABRT --kill-after=60 ${RUN_TIMEOUT:-1800} \
-    python3 -u /opt/DeepEP/tests/elastic/test_ep.py \
+    python3 -u ${TEST_SCRIPT:-/opt/DeepEP/tests/elastic/test_ep.py} \
     --num-processes=${NUM_PROCESSES} --num-tokens=${TOKENS} \
     --hidden=7168 --num-topk=8 --num-experts=256 \
     --num-sms=${NUM_SMS} --allow-hybrid-mode=1 \
     --prefer-overlap-with-compute=${PREFER_OVERLAP:-0} ${FIRST_ONLY_ARG} \
     ${IGNORE_LOCAL:+--ignore-local-traffic} $*"
+# EXTRA_MOUNT: a host dir mounted at the SAME path, so a GPU coredump
+# (CUDA_ENABLE_COREDUMP_ON_EXCEPTION=1 + CUDA_COREDUMP_FILE=$EXTRA_MOUNT/... via EXTRA_ENV)
+# outlives the --rm container, and TEST_SCRIPT can point at a script kept there. TEST_SCRIPT
+# replaces test_ep.py but still receives the same argument list.
 # python3 -u / PYTHONUNBUFFERED: without them stdout is block-buffered into the
 # redirected log, so a run that hangs in NCCL/GIN init shows an EMPTY log.
 #

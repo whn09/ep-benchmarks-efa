@@ -1,0 +1,24 @@
+# DeepEP image + one source patch, rebuilt in place -- for A/B arms whose tree is not a pushed sha.
+#
+#   docker build -f repro_xid31/Dockerfile.patch --build-arg BASE=deepep-v2-efa-official:sm100-874779c \
+#     --build-arg PATCH=repro_xid31/patches/pr5_on_874779c.patch -t deepep-v2-efa-official:sm100-874779c-pr5 .
+#
+# The patch must apply cleanly to the base's /opt/DeepEP (git apply --check), and the base egg is
+# removed first: two deep_ep eggs on easy-install.pth import in .pth order, not install order, so a
+# leftover would give a "patched" image that runs the unpatched tree (same trap as Dockerfile.stack).
+ARG BASE=deepep-v2-efa-official:sm100-874779c
+FROM ${BASE}
+ARG PATCH
+# A string the patched tree must contain in the INSTALLED include dir (what the JIT compiles).
+ARG PATCH_MARKER=kNumReservedBarrierSignals
+COPY ${PATCH} /tmp/deepep.patch
+RUN set -eux; cd /opt/DeepEP; git apply --check /tmp/deepep.patch; git apply /tmp/deepep.patch; \
+    sha256sum /tmp/deepep.patch | cut -d' ' -f1 > /opt/DeepEP/BUILD_PATCH_SHA256; \
+    SITE="$(python3 -c 'import deep_ep, os; print(os.path.dirname(os.path.dirname(deep_ep.__file__)))' 2>/dev/null || python3 -c 'import site; print(site.getsitepackages()[0])')"; \
+    pip uninstall -y deep-ep deep_ep 2>/dev/null || true; \
+    rm -rf "$SITE"/deep_ep* ; \
+    if [ -f "$SITE/easy-install.pth" ]; then grep -v deep_ep "$SITE/easy-install.pth" > /tmp/pth || true; mv /tmp/pth "$SITE/easy-install.pth"; fi; \
+    NCCL_LIB="$(python3 -c 'import nvidia.nccl, os; print(os.path.join(list(nvidia.nccl.__path__)[0], "lib"))')"; \
+    LIBRARY_PATH="$NCCL_LIB:${LIBRARY_PATH:-}" python3 setup.py install; rm -rf build; \
+    PKG="$(python3 -c 'import importlib.util as u, os; print(os.path.dirname(u.find_spec("deep_ep").origin))')"; \
+    grep -rq "$PATCH_MARKER" "$PKG/include/deep_ep/"
