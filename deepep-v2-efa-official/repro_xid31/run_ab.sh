@@ -18,6 +18,9 @@ NODES="${NODES:?}"
 DEADLINE_UTC="${DEADLINE_UTC:?HH:MM}"
 SLOT_SECS="${SLOT_SECS:-2700}"
 SUMMARY="${SUMMARY:-$HOME/xid31_ab_summary.tsv}"
+# Megatron layer of every arm's image: <deepep tag>-$MLM_TAG. mlm1edcc0c = the pinned dev tree the
+# 2026-10-09 results used; set e.g. MLM_TAG=mlm<main sha7> to rotate the same arms on Megatron main.
+MLM_TAG="${MLM_TAG:-mlm1edcc0c}"
 # shellcheck disable=SC2206
 NODE_ARR=($NODES)
 SSH="ssh -n -o ConnectTimeout=10"
@@ -30,17 +33,17 @@ while :; do
   [ "$left" -gt 600 ] || { echo "=== deadline reached"; break; }
   arm=${@:$((i % $# + 1)):1}; i=$((i + 1))
   case "$arm" in
-    main_pre)   IMG=deepep-v2-efa-official:sm100-b90a617-mlm1edcc0c; OV=1 ;;
-    main_fixed) IMG=deepep-v2-efa-official:sm100-6de427b-mlm1edcc0c; OV=1 ;;
-    base) IMG=deepep-v2-efa-official:sm100-874779c-mlm1edcc0c; OV=1 ;;
-    pr5)  IMG=deepep-v2-efa-official:sm100-874779c-pr5-mlm1edcc0c; OV=1 ;;
-    ovl0) IMG=deepep-v2-efa-official:sm100-874779c-mlm1edcc0c; OV=0 ;;
-    probe) IMG=deepep-v2-efa-official:sm100-874779c-probe-mlm1edcc0c; OV=1 ;;   # EP_PROBE + slot/dst guard
-    min)   IMG=deepep-v2-efa-official:sm100-874779c-min-mlm1edcc0c; OV=1 ;;     # cached data channels above QP 0
+    main_pre)   IMG=deepep-v2-efa-official:sm100-b90a617-$MLM_TAG; OV=1 ;;
+    main_fixed) IMG=deepep-v2-efa-official:sm100-6de427b-$MLM_TAG; OV=1 ;;
+    base) IMG=deepep-v2-efa-official:sm100-874779c-$MLM_TAG; OV=1 ;;
+    pr5)  IMG=deepep-v2-efa-official:sm100-874779c-pr5-$MLM_TAG; OV=1 ;;
+    ovl0) IMG=deepep-v2-efa-official:sm100-874779c-$MLM_TAG; OV=0 ;;
+    probe) IMG=deepep-v2-efa-official:sm100-874779c-probe-$MLM_TAG; OV=1 ;;   # EP_PROBE + slot/dst guard
+    min)   IMG=deepep-v2-efa-official:sm100-874779c-min-$MLM_TAG; OV=1 ;;     # cached data channels above QP 0
     *) echo "unknown arm $arm" >&2; exit 1 ;;
   esac
   secs=$(( left - 300 < SLOT_SECS ? left - 300 : SLOT_SECS ))
-  tag="ab_${arm}_$(date -u +%H%M)"
+  tag="ab_${arm}_${MLM_TAG}_$(date -u +%H%M)"
   before=$(xids); t0=$(date -u +%s)
   echo "=== $tag image=$IMG overlap=$OV secs=$secs xid_before=$before"
   NODES="$NODES" TAG="$tag" NUM_LAYERS=24 TRAIN_ITERS=100000 RUN_TIMEOUT="$secs" PORT=$((29600 + i)) \
