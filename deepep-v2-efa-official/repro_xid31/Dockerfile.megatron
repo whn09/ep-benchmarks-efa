@@ -67,5 +67,5 @@ RUN test -n "$MEGATRON_REF" \
 # node every other node fails with "No module named megatron.core.datasets.helpers_cpp".
 COPY repro_xid31/mlm_warm_ep_group.py /tmp/mlm_warm_ep_group.py
 RUN python3 /tmp/mlm_warm_ep_group.py /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py \
- && grep -q "repro_xid31: create the EP group" /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py
+ && sed -n '/^def get_elastic_buffer/,/^class /p' /opt/Megatron-LM/megatron/core/transformer/moe/fused_a2a.py | grep -q "all_reduce("
 ENV PYTHONPATH=/opt/Megatron-LM
