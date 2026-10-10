@@ -2,7 +2,10 @@
 # Rotate Megatron arms until a deadline, one run per slot, and record per-run outcome.
 #
 #   NODES="..." DEADLINE_UTC=10:55 SLOT_SECS=2700 ./run_ab.sh arm1 arm2 ...
-#   arm := base | pr5 | ovl0 | probe | min
+#   arm := main_pre | main_fixed | base | pr5 | ovl0 | probe | min
+#   main_pre   = DeepEP b90a617, the parent of the merged fix (unfixed)
+#   main_fixed = DeepEP 6de427b, PR #18 merged: the only difference from main_pre is the fix
+#   base       = DeepEP 874779c (the tree the 2026-10-09 results measured; also lacks #15)
 #
 # A failure is rare and timing-dependent (same mock data failed at step 72 once and ran 290+
 # steps clean the next time), so arms are ROTATED rather than run in blocks and compared as
@@ -27,6 +30,8 @@ while :; do
   [ "$left" -gt 600 ] || { echo "=== deadline reached"; break; }
   arm=${@:$((i % $# + 1)):1}; i=$((i + 1))
   case "$arm" in
+    main_pre)   IMG=deepep-v2-efa-official:sm100-b90a617-mlm1edcc0c; OV=1 ;;
+    main_fixed) IMG=deepep-v2-efa-official:sm100-6de427b-mlm1edcc0c; OV=1 ;;
     base) IMG=deepep-v2-efa-official:sm100-874779c-mlm1edcc0c; OV=1 ;;
     pr5)  IMG=deepep-v2-efa-official:sm100-874779c-pr5-mlm1edcc0c; OV=1 ;;
     ovl0) IMG=deepep-v2-efa-official:sm100-874779c-mlm1edcc0c; OV=0 ;;
