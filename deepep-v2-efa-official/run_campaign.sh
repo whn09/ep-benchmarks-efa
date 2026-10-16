@@ -443,6 +443,15 @@ cell () {   # $1 arm  $2 image  $3 tokens  $4 sms  $5 knobtag  $6 extra env  $7 
       echo "container env). Use the 7th CELLS field or the campaign-level variable." >&2
       exit 1 ;;
   esac
+  # ALLOW_HYBRID=0 in the EXTRA_ENV column selects direct mode. It is a CLI arg, so
+  # it is lifted out into run_test_ep.sh's own env; the knobtag must say so, or a
+  # direct log would pool with the hybrid one of the same arm.
+  hyb=1
+  case " $extra " in *" ALLOW_HYBRID=0 "*) hyb=0 ;; esac
+  if [ "$hyb" = 0 ]; then
+    case "$knob" in *direct*) ;; *)
+      echo "ALLOW_HYBRID=0 needs 'direct' in the knobtag (got '$knob')" >&2; exit 1 ;; esac
+  fi
   tag="${arm}_${NNODES}N_${sms}sm_${tok}tok_${knob}_nodbg${GIN_TAG}${IGL_TAG}_ovlp${ovlp}_rep${rep}"
   port=$((port + 1))
   # EP_BUFFER_DEBUG is never set here: it printf()s from inside dispatch's host
@@ -452,7 +461,7 @@ cell () {   # $1 arm  $2 image  $3 tokens  $4 sms  $5 knobtag  $6 extra env  $7 
   # would silently come back as type 5 while the tag still said _type2.
   env="IMAGE=$img WORLD_SIZE=$NNODES NUM_PROCESSES=$NUM_PROCESSES TOKENS=$tok \
 NUM_SMS=$sms MASTER_PORT=$port IGNORE_LOCAL='$IGNORE_LOCAL' NCCL_DEBUG=WARN TEST_FIRST_ONLY=1 \
-PREFER_OVERLAP=$ovlp GIN_ENV='$GIN_ENV' EXTRA_ENV='$extra'"
+PREFER_OVERLAP=$ovlp ALLOW_HYBRID=$hyb GIN_ENV='$GIN_ENV' EXTRA_ENV='$extra'"
 
   if [ "${RERUN:-}" != 1 ] && done_on_all "$tag"; then
     resumed=$((resumed + 1))

@@ -40,6 +40,10 @@
 #                    the env is unsafe: the JIT cache key hashes `flags` but NOT
 #                    included header content, so an env-free header patch can serve
 #                    a stale cubin.  See README 'Rules that decide ...' rule 1.
+#   ALLOW_HYBRID=1   value of --allow-hybrid-mode. 0 = direct mode: every rank puts
+#                    straight to every remote rank over FULL (cross-rail) connections,
+#                    no intra-node dedup or forward hop. It books all traffic as SU, so
+#                    the GB/s columns read 0 (SO) -- compare us only.
 #   PREFER_OVERLAP=0 value of --prefer-overlap-with-compute. 0 is the working
 #                    point and every published number uses it. It is NOT a
 #                    cosmetic flag: on PR #8+#9 both the channel-clamp removal and
@@ -291,7 +295,7 @@ docker run --rm --init \
     python3 -u ${TEST_SCRIPT:-/opt/DeepEP/tests/elastic/test_ep.py} \
     --num-processes=${NUM_PROCESSES} --num-tokens=${TOKENS} \
     --hidden=7168 --num-topk=8 --num-experts=256 \
-    --num-sms=${NUM_SMS} --allow-hybrid-mode=1 \
+    --num-sms=${NUM_SMS} --allow-hybrid-mode=${ALLOW_HYBRID:-1} \
     --prefer-overlap-with-compute=${PREFER_OVERLAP:-0} ${FIRST_ONLY_ARG} \
     ${IGNORE_LOCAL:+--ignore-local-traffic} $*"
 # EXTRA_MOUNT: a host dir mounted at the SAME path, so a GPU coredump
