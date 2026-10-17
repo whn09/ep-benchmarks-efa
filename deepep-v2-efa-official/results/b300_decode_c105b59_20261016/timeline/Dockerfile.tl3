@@ -1,0 +1,17 @@
+# Experiment-only: timeline marks in the dispatch copy epilogue (apply_tl3.py).
+# BASE must be the tl2-ru image.
+ARG BASE
+FROM ${BASE}
+COPY apply_tl3.py /tmp/tl3/
+RUN set -eux; cd /opt/DeepEP; \
+    python3 /tmp/tl3/apply_tl3.py /opt/DeepEP
+RUN set -eux; cd /opt/DeepEP; \
+    SITE="$(cd / && python3 -c 'import importlib.util,os; print(os.path.dirname(os.path.dirname(importlib.util.find_spec("deep_ep").origin)))')"; \
+    pip uninstall -y deep-ep deep_ep 2>/dev/null || true; rm -rf "$SITE"/deep_ep*; \
+    if [ -f "$SITE/easy-install.pth" ]; then grep -v deep_ep "$SITE/easy-install.pth" > /tmp/pth || true; mv /tmp/pth "$SITE/easy-install.pth"; fi; \
+    NCCL_LIB="$(python3 -c 'import nvidia.nccl, os; print(os.path.join(list(nvidia.nccl.__path__)[0], "lib"))')"; \
+    LIBRARY_PATH="$NCCL_LIB:/usr/local/cuda/lib64/stubs" python3 setup.py install; rm -rf build; \
+    PKG="$(cd / && python3 -c 'import importlib.util,os; print(os.path.dirname(importlib.util.find_spec("deep_ep").origin))')"; \
+    grep -q 'kFirstAccEvent' "$(find "$PKG" -name timeline.cuh | head -1)"; \
+    grep -q 'EP_TL_MARK(2)' "$(find "$PKG" -name dispatch_copy_epilogue.cuh | head -1)"; \
+    echo "timeline3" >> /opt/DeepEP/BUILD_REF_PARENTS

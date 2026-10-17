@@ -1,0 +1,86 @@
+##### chcap start 11:17:46
+=== MASTER_IP=172.31.14.167 (private ip of B300-1) ===
+=== CELLS given explicitly; PRESET=default ignored
+=== images referenced by CELLS:
+  deepep-v2-efa-official:sm103-c105b59-chcap               2/2 nodes  c105b599104e4229e5ad5f599653f3b5f8aa7f2b
+  deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap  2/2 nodes  f66b7cb1b38a6faaf5c98a6e59226436cd9485ee
+=== preconditions:
+  B300-1     efa.ko=3.3.0g   compute_procs=0
+  B300-2     efa.ko=3.3.0g   compute_procs=0
+=== cells (9 per rep, REPS=2, PRESET=<explicit CELLS>, skipped=0):
+  main|deepep-v2-efa-official:sm103-c105b59-chcap|128|12|ch1|EP_MAX_CHANNELS_PER_SM=1|
+  main|deepep-v2-efa-official:sm103-c105b59-chcap|128|12|ch2|EP_MAX_CHANNELS_PER_SM=2|
+  main|deepep-v2-efa-official:sm103-c105b59-chcap|128|12|ch3|EP_MAX_CHANNELS_PER_SM=3|
+  main|deepep-v2-efa-official:sm103-c105b59-chcap|128|12|choff||
+  pr89|deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap|128|12|ch1|EP_MAX_CHANNELS_PER_SM=1|
+  pr89|deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap|128|12|ch2|EP_MAX_CHANNELS_PER_SM=2|
+  pr89|deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap|128|12|ch3|EP_MAX_CHANNELS_PER_SM=3|
+  pr89|deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap|128|12|ch4|EP_MAX_CHANNELS_PER_SM=4|
+  pr89|deepep-v2-efa-official:sm103-stackc105b59x3c737dc-chcap|128|12|choff||
+=== ~30 min at ~100 s/cell including the 20 s settle
+=== 2 nodes (B300-1 B300-2), leader B300-1, 2 reps, GIN='NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0'
+########## rep 1 ##########
+=== main_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep1  (port 9001)
+    rc 0
+=== main_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep1  (port 9002)
+    rc 0
+=== main_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep1  (port 9003)
+    rc 0
+=== main_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep1  (port 9004)
+    rc 0
+=== pr89_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep1  (port 9005)
+    rc 0
+=== pr89_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep1  (port 9006)
+    rc 0
+=== pr89_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep1  (port 9007)
+    rc 0
+=== pr89_2N_12sm_128tok_ch4_nodbg_gin5_ovlp0_rep1  (port 9008)
+    rc 0
+=== pr89_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep1  (port 9009)
+    rc 0
+########## rep 2 ##########
+=== main_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep2  (port 9010)
+    rc 0
+=== main_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep2  (port 9011)
+    rc 0
+=== main_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep2  (port 9012)
+    rc 0
+=== main_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep2  (port 9013)
+    rc 0
+=== pr89_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep2  (port 9014)
+    rc 0
+=== pr89_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep2  (port 9015)
+    rc 0
+=== pr89_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep2  (port 9016)
+    rc 0
+=== pr89_2N_12sm_128tok_ch4_nodbg_gin5_ovlp0_rep2  (port 9017)
+    rc 0
+=== pr89_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep2  (port 9018)
+    rc 0
+
+=== cells ok=18 bad=0 skipped=0 already-on-disk=0
+=== fetch and check (every node writes its OWN logs -- combine is layered by
+    node, so a table built from the leader alone is wrong):
+    scp 'B300-1:/home/ubuntu/epruns/*.node1.log' ./logs/
+    scp 'B300-2:/home/ubuntu/epruns/*.node2.log' ./logs/
+    ./verify_run.sh logs/*.log        # acceptance checks, per log
+    EPRUNS=./logs python3 results/*/parse_ep.py <tag>   # per-tag, all ranks pooled
+main_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep1
+main_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep2
+main_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep1
+main_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep2
+main_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep1
+main_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep2
+main_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep1
+main_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep2
+pr89_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep1
+pr89_2N_12sm_128tok_ch1_nodbg_gin5_ovlp0_rep2
+pr89_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep1
+pr89_2N_12sm_128tok_ch2_nodbg_gin5_ovlp0_rep2
+pr89_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep1
+pr89_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0_rep2
+pr89_2N_12sm_128tok_ch4_nodbg_gin5_ovlp0_rep1
+pr89_2N_12sm_128tok_ch4_nodbg_gin5_ovlp0_rep2
+pr89_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep1
+pr89_2N_12sm_128tok_choff_nodbg_gin5_ovlp0_rep2
+##### chcap end rc=0 12:07:46

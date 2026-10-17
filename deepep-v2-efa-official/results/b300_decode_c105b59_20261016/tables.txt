@@ -1,0 +1,370 @@
+b300 decode campaign, amazon-contributing/DeepEP main c105b59 (+ PR merges / experiment layers)
+2 x p6-b300.48xlarge, 2N/16 ranks unless noted, GIN type 5, ovlp=0, FP8 dispatch (--test-first-only)
+Every number = mean over reps of the all-16-rank mean, us. Layer = dispatch + reduced combine;
+'+epi' adds the copy and reduce epilogue kernels.
+
+########## A. PR arms, 12 SM (batch 1, 3 reps)
+128 tok, 2N/16 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3   130.9 ( +0.0%) [ 0.6]   121.5 ( +0.0%) [ 1.0]   166.4 ( +0.0%) [ 0.3]   184.2 ( +0.0%) [ 0.4]    315.2 ( +0.0%)   333.3
+pr89      3   122.8 ( -6.2%) [ 1.3]   115.0 ( -5.4%) [ 0.7]   164.9 ( -0.9%) [ 0.5]   173.0 ( -6.1%) [ 0.7]    295.8 ( -6.1%)   308.8
+pr16      3   131.4 ( +0.3%) [ 2.1]   122.4 ( +0.7%) [ 0.9]   167.0 ( +0.4%) [ 0.8]   184.6 ( +0.2%) [ 0.7]    315.9 ( +0.2%)   335.3
+pr17      3   131.1 ( +0.1%) [ 1.4]   121.5 ( -0.0%) [ 0.8]   166.8 ( +0.2%) [ 0.1]   184.2 ( -0.1%) [ 0.7]    315.3 ( +0.0%)   333.7
+epilogue us (mean): main: copy 12.7 / reduce 5.4, pr89: copy 7.5 / reduce 5.4, pr16: copy 14.0 / reduce 5.4, pr17: copy 13.0 / reduce 5.4
+
+8192 tok, 2N/16 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3  1048.8 ( +0.0%) [ 2.4]  1039.2 ( +0.0%) [ 3.3]  2883.2 ( +0.0%) [ 9.9]  3754.0 ( +0.0%) [13.8]   4802.8 ( +0.0%)  5041.7
+pr89      3   944.7 ( -9.9%) [ 0.7]   937.8 ( -9.8%) [ 0.4]  2787.6 ( -3.3%) [20.3]  3500.7 ( -6.7%) [ 9.8]   4445.4 ( -7.4%)  4674.5
+pr16      3  1048.2 ( -0.1%) [ 2.9]  1039.3 ( +0.0%) [ 1.6]  3304.2 (+14.6%) [ 6.9]  3965.7 ( +5.6%) [28.2]   5013.9 ( +4.4%)  5252.5
+pr17      3  1023.3 ( -2.4%) [ 5.5]  1007.4 ( -3.1%) [ 1.9]  2887.1 ( +0.1%) [ 5.8]  3731.4 ( -0.6%) [15.9]   4754.7 ( -1.0%)  4989.6
+epilogue us (mean): main: copy 172.8 / reduce 66.1, pr89: copy 159.3 / reduce 69.8, pr16: copy 172.3 / reduce 66.3, pr17: copy 168.6 / reduce 66.3
+
+########## B. token floor, 12 SM (batch 2, 3 reps)
+1 tok, 2N/16 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3   109.7 ( +0.0%) [ 1.1]    99.1 ( +0.0%) [ 1.6]    74.4 ( +0.0%) [ 0.5]    89.0 ( +0.0%) [ 0.7]    198.7 ( +0.0%)   208.0
+pr89      3   106.2 ( -3.2%) [ 1.5]    94.9 ( -4.2%) [ 2.1]    68.2 ( -8.3%) [ 0.3]    76.8 (-13.7%) [ 1.2]    183.0 ( -7.9%)   191.9
+epilogue us (mean): main: copy 4.5 / reduce 4.8, pr89: copy 3.9 / reduce 5.0
+
+32 tok, 2N/16 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3   115.4 ( +0.0%) [ 1.1]   106.8 ( +0.0%) [ 0.4]   112.5 ( +0.0%) [ 0.7]   119.1 ( +0.0%) [ 1.0]    234.5 ( +0.0%)   249.3
+pr89      3   109.1 ( -5.5%) [ 0.8]    98.8 ( -7.5%) [ 3.3]   113.2 ( +0.7%) [ 0.3]   118.9 ( -0.1%) [ 0.3]    228.0 ( -2.8%)   238.5
+epilogue us (mean): main: copy 8.4 / reduce 6.4, pr89: copy 4.2 / reduce 6.3
+
+########## C. 1-node control, 8 ranks, NVLink only (3 reps)
+1 tok, 1N/8 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3    18.1 ( +0.0%) [ 0.2]    18.7 ( +0.0%) [ 0.4]    16.8 ( +0.0%) [ 1.0]    26.4 ( +0.0%) [ 0.8]     44.5 ( +0.0%)    61.5
+epilogue us (mean): main: copy 3.2 / reduce 13.8
+
+128 tok, 1N/8 ranks, 12 SM, GIN5, ovlp0 -- mean of reps (each = 16-rank mean), us
+arm    reps               dispatch        cached dispatch                combine        reduced combine   disp+redComb  +epilogues
+main      3    25.8 ( +0.0%) [ 0.2]    25.7 ( +0.0%) [ 0.9]    34.3 ( +0.0%) [ 0.4]    54.2 ( +0.0%) [ 3.0]     80.1 ( +0.0%)   101.6
+pr89      3    25.9 ( +0.3%) [ 0.1]    25.0 ( -2.5%) [ 0.8]    33.8 ( -1.4%) [ 0.8]    57.3 ( +5.6%) [ 9.6]     83.2 ( +3.9%)   104.0
+epilogue us (mean): main: copy 4.3 / reduce 17.2, pr89: copy 4.2 / reduce 16.6
+
+########## D. SM sweep at 128 tok (batch 3, 2 reps)
+128 tok, 2N/16 ranks, GIN5, ovlp0, knob lowsm, mean of 2 reps; [rep range]
+arm    SM    QPs             dispatch     cached dispatch             combine     reduced combine   disp+redC  +epi
+main    4  11/11        127.6 [ 0.4]       121.0 [ 2.2]       223.5 [ 0.0]       269.7 [ 0.7]     397.3   415.9  (n=2)
+main    6  11/11        115.1 [ 2.1]       113.9 [ 0.4]       185.6 [ 0.3]       217.1 [ 0.8]     332.3   347.2  (n=2)
+main    8  11/11        111.7 [ 1.9]       108.4 [ 1.4]       167.2 [ 0.1]       192.9 [ 0.7]     304.6   316.0  (n=2)
+main   12  11/11        130.5 [ 0.3]       122.4 [ 0.0]       166.2 [ 0.3]       184.0 [ 0.4]     314.4   333.4  (n=2)
+pr89    4  13/13        123.0 [ 0.6]       121.1 [ 0.4]       193.3 [ 1.6]       239.3 [ 0.2]     362.3   380.5  (n=2)
+pr89    6  13/13        119.1 [ 0.7]       110.0 [ 0.2]       164.0 [ 0.1]       181.7 [ 0.7]     300.8   315.1  (n=2)
+pr89    8  13/13        115.2 [ 2.8]       113.3 [ 0.0]       151.5 [ 0.2]       165.8 [ 0.0]     281.0   293.2  (n=2)
+pr89   12  13/13        123.6 [ 0.4]       115.0 [ 0.5]       164.3 [ 0.8]       172.6 [ 0.8]     296.2   309.0  (n=2)
+
+########## E. channels-per-SM cap at 12 SM, 128 tok (EP_MAX_CHANNELS_PER_SM, 2 reps)
+128 tok, 2N/16 ranks, GIN5, ovlp0, 12 SM, channel cap, mean of 2 reps; [rep range]
+arm    SM    QPs             dispatch     cached dispatch             combine     reduced combine   disp+redC  +epi
+main    ch1  11/11        129.0 [ 1.5]       124.0 [ 0.8]       234.0 [ 0.9]       299.2 [ 2.0]     428.2   448.1  (n=2)
+main    ch2  11/11        118.5 [ 0.2]       113.0 [ 0.5]       172.0 [ 0.3]       210.8 [ 0.5]     329.3   344.4  (n=2)
+main    ch3  11/11        127.7 [ 2.0]       118.2 [ 1.4]       166.3 [ 0.1]       189.9 [ 0.5]     317.6   335.6  (n=2)
+main ch4 incomplete
+main  choff  11/11        132.6 [ 0.3]       121.9 [ 1.1]       166.9 [ 0.4]       183.9 [ 0.5]     316.5   334.9  (n=2)
+pr89    ch1  13/13        128.4 [ 0.5]       122.0 [ 0.6]       224.4 [ 0.5]       282.6 [ 0.4]     411.0   434.2  (n=2)
+pr89    ch2  13/13        113.6 [ 0.3]       108.6 [ 0.4]       164.1 [ 0.4]       196.6 [ 0.6]     310.2   326.5  (n=2)
+pr89    ch3  13/13        114.3 [ 0.8]       110.6 [ 0.7]       156.7 [ 0.1]       169.9 [ 0.3]     284.2   296.4  (n=2)
+pr89    ch4  13/13        118.2 [ 0.4]       111.6 [ 0.1]       157.5 [ 0.5]       169.0 [ 0.5]     287.2   298.5  (n=2)
+pr89  choff  13/13        123.0 [ 1.5]       115.0 [ 0.7]       165.3 [ 0.8]       173.0 [ 0.6]     295.9   308.5  (n=2)
+
+########## F. combine RDMA batch size, main+#8+#9 8 SM (EP_COMBINE_BATCH_SIZE, 2 reps)
+pr89cb 8 SM 128 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+cb12          115.5 [ 0.3]       111.2 [ 2.6]       151.4 [ 0.4]       165.2 [ 0.2]     280.7 ( +0.0%)  293.2  2
+cb8           113.0 [ 1.1]       109.0 [ 4.9]       151.2 [ 0.1]       165.2 [ 0.4]     278.2 ( -0.9%)  290.7  2
+cb6           116.2 [ 1.6]       109.8 [ 3.7]       151.5 [ 0.3]       165.3 [ 0.8]     281.5 ( +0.3%)  294.5  2
+cb4           114.5 [ 3.5]       109.8 [ 1.6]       151.2 [ 0.2]       165.1 [ 0.0]     279.6 ( -0.4%)  292.2  2
+cb3           113.4 [ 1.7]       109.2 [ 1.9]       162.0 [ 0.0]       174.5 [ 0.2]     287.9 ( +2.6%)  300.6  2
+cb2           114.5 [ 2.4]       108.8 [ 5.6]       190.2 [ 0.2]       202.1 [ 0.0]     316.6 (+12.8%)  329.0  2
+cb1           114.9 [ 2.0]       111.4 [ 3.4]       245.9 [ 0.8]       257.2 [ 0.3]     372.1 (+32.6%)  384.5  2
+
+pr89cb 8 SM 8192 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+cb12         1300.3 [ 0.8]      1280.9 [ 0.2]      3786.1 [64.8]      4842.8 [ 1.4]    6143.1 ( +0.0%) 6369.7  2
+cb4          1300.2 [ 0.1]      1280.7 [ 0.2]      4277.3 [ 4.9]      4986.9 [ 0.3]    6287.1 ( +2.3%) 6513.5  2
+
+########## G. scale-up local-reduce unroll cap, main+#8+#9 8 SM (EP_COMBINE_REDUCE_UNROLL, 2 reps)
+pr89ru 8 SM 128 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+ru4           114.5 [ 2.1]       110.7 [ 2.1]       151.3 [ 0.1]       165.0 [ 0.2]     279.5 ( +0.0%)  292.0  2
+ru7           116.1 [ 2.2]       112.1 [ 0.3]       151.3 [ 0.0]       160.5 [ 0.1]     276.6 ( -1.0%)  288.6  2
+ru14          113.8 [ 1.5]       113.2 [ 1.9]       151.2 [ 0.1]       175.3 [ 0.5]     289.1 ( +3.4%)  301.6  2
+
+########## H. epilogue kernels per config (kineto, us)
+main_1N_12sm_128tok_default_nodbg_gin5_ovlp0               disp   25.8 copy   4.3 [ 4.1- 4.5] | redComb   54.2 reduce  17.2
+main_2N_12sm_128tok_default_nodbg_gin5_ovlp0               disp  130.9 copy  12.7 [ 8.2-17.9] | redComb  184.2 reduce   5.4
+pr89_2N_12sm_128tok_default_nodbg_gin5_ovlp0               disp  122.8 copy   7.5 [ 4.5-12.9] | redComb  173.0 reduce   5.4
+main_2N_8sm_128tok_lowsm_nodbg_gin5_ovlp0                  disp  111.7 copy   6.0 [ 4.3- 8.6] | redComb  192.9 reduce   5.3
+pr89_2N_8sm_128tok_lowsm_nodbg_gin5_ovlp0                  disp  115.2 copy   6.5 [ 4.1-11.4] | redComb  165.8 reduce   5.7
+pr89_2N_12sm_128tok_ch3_nodbg_gin5_ovlp0                   disp  114.3 copy   5.3 [ 4.1- 7.7] | redComb  169.9 reduce   6.8
+main_2N_12sm_1tok_default_nodbg_gin5_ovlp0                 disp  109.7 copy   4.5 [ 3.5- 6.3] | redComb   89.0 reduce   4.8
+
+########## I. phase timeline, main+#8+#9 128 tok (EP_TIMELINE images; us since block entry)
+--- pr89tl_2N_8sm_128tok_tl_
+records: 1562 complete of 1920 raw (81%)
+
+== combine  (305 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          19.5     19.5   p90   32.1  n=305
+   2: scale-up (NVLink push) done                 62.4     86.3   p90  105.0  n=305
+   3: forward staging done                        91.0    109.2   p90  126.2  n=305
+   4: remote arrivals complete                   104.6    142.9   p90  151.2  n=305
+   5: proxy RDMA put (first..last)                68.4    112.5   p90  129.0  n=305
+   6: proxy done                                 123.1    123.1   p90  142.7  n=305
+   7: batch handed to proxy (first..last)         63.8     75.6   p90   93.1  n=305
+   block-entry spread within a rank: median 0.0 us
+
+== reduced combine  (312 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          27.9     27.9   p90   33.9  n=312
+   2: scale-up (NVLink push) done                 74.7    104.1   p90  126.4  n=312
+   3: forward staging done                       109.6    133.2   p90  160.0  n=312
+   4: remote arrivals complete                   122.8    156.7   p90  170.0  n=312
+   5: proxy RDMA put (first..last)                78.5    125.2   p90  141.7  n=312
+   6: proxy done                                 140.0    140.0   p90  166.5  n=312
+   7: batch handed to proxy (first..last)         75.0     95.1   p90  111.0  n=312
+   block-entry spread within a rank: median 0.0 us
+
+== ('disp', 2)  (320 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          27.0     27.0   p90   33.4  n=320
+   2: scale-out RDMA put (first..last)            36.0     37.0   p90   46.6  n=320
+   3: scale-out role done                         50.3     59.8   p90   73.0  n=320
+   4: forward: source arrived (first..last)       50.4     82.2   p90   89.5  n=320
+   5: forward loop done                           71.4     86.8   p90   93.8  n=320
+   6: forward drain done                          72.8     87.9   p90   95.2  n=320
+   8: end NVLink barrier exit                     93.8     93.6   p90  108.6  n=320
+   block-entry spread within a rank: median 0.0 us
+
+== dispatch  (320 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          26.1     26.1   p90   33.6  n=320
+   2: scale-out RDMA put (first..last)            36.2     39.4   p90   47.4  n=320
+   3: scale-out role done                         51.6     62.5   p90   76.2  n=320
+   4: forward: source arrived (first..last)       53.2     84.0   p90   92.3  n=320
+   5: forward loop done                           73.5     88.8   p90   96.8  n=320
+   6: forward drain done                          75.3     90.1   p90   98.2  n=320
+   7: notify role done                            31.7     31.7   p90   75.1  n=320
+   8: end NVLink barrier exit                     97.1     97.3   p90  111.7  n=320
+   block-entry spread within a rank: median 0.0 us
+
+== expanded dispatch  (305 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          25.2     25.2   p90   33.5  n=305
+   2: scale-out RDMA put (first..last)            34.7     37.2   p90   47.1  n=305
+   3: scale-out role done                         49.5     60.2   p90   74.8  n=305
+   4: forward: source arrived (first..last)       51.7     83.3   p90   90.8  n=305
+   5: forward loop done                           72.5     88.3   p90   95.4  n=305
+   6: forward drain done                          74.0     89.6   p90   96.6  n=305
+   7: notify role done                            29.0     29.0   p90   71.6  n=305
+   8: end NVLink barrier exit                     95.9     96.4   p90  110.8  n=305
+   block-entry spread within a rank: median 0.0 us
+
+--- pr89tl_2N_12sm_128tok_tl_
+records: 2352 complete of 2880 raw (82%)
+
+== combine  (438 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          26.4     26.4   p90   32.8  n=438
+   2: scale-up (NVLink push) done                 56.9     81.2   p90  101.9  n=438
+   3: forward staging done                        83.8     99.8   p90  116.3  n=438
+   4: remote arrivals complete                   100.7    156.9   p90  164.4  n=438
+   5: proxy RDMA put (first..last)                63.3    126.9   p90  142.9  n=438
+   6: proxy done                                 141.2    141.2   p90  156.8  n=438
+   7: batch handed to proxy (first..last)         57.2     69.8   p90   83.5  n=438
+   block-entry spread within a rank: median 0.2 us
+
+== reduced combine  (480 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          21.1     21.2   p90   32.2  n=480
+   2: scale-up (NVLink push) done                 60.3     90.2   p90  109.0  n=480
+   3: forward staging done                        92.7    112.9   p90  130.1  n=480
+   4: remote arrivals complete                   108.9    163.8   p90  172.9  n=480
+   5: proxy RDMA put (first..last)                70.0    133.7   p90  146.9  n=480
+   6: proxy done                                 146.4    146.4   p90  158.7  n=480
+   7: batch handed to proxy (first..last)         63.0     79.5   p90   92.2  n=480
+   block-entry spread within a rank: median 0.2 us
+
+== ('disp', 2)  (486 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          21.3     21.3   p90   26.7  n=486
+   2: scale-out RDMA put (first..last)            29.3     32.8   p90   40.3  n=486
+   3: scale-out role done                         48.1     70.4   p90   80.6  n=486
+   4: forward: source arrived (first..last)       52.9     90.3   p90   95.3  n=486
+   5: forward loop done                           69.4     93.5   p90   98.5  n=486
+   6: forward drain done                          70.4     94.5   p90   99.4  n=486
+   8: end NVLink barrier exit                    100.1    100.1   p90  108.4  n=486
+   block-entry spread within a rank: median 0.1 us
+
+== dispatch  (463 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          20.7     20.7   p90   32.4  n=463
+   2: scale-out RDMA put (first..last)            30.5     34.8   p90   47.2  n=463
+   3: scale-out role done                         50.2     74.8   p90   88.9  n=463
+   4: forward: source arrived (first..last)       54.8     93.5   p90   99.5  n=463
+   5: forward loop done                           71.4     96.8   p90  103.0  n=463
+   6: forward drain done                          72.6     97.9   p90  104.1  n=463
+   7: notify role done                            26.6     26.6   p90   36.8  n=463
+   8: end NVLink barrier exit                    110.2    110.2   p90  115.1  n=463
+   block-entry spread within a rank: median 0.1 us
+
+== expanded dispatch  (485 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          22.9     22.9   p90   31.6  n=485
+   2: scale-out RDMA put (first..last)            31.5     34.8   p90   45.3  n=485
+   3: scale-out role done                         52.1     76.1   p90   86.9  n=485
+   4: forward: source arrived (first..last)       54.6     92.7   p90   99.0  n=485
+   5: forward loop done                           71.1     96.0   p90  101.5  n=485
+   6: forward drain done                          72.3     97.1   p90  102.5  n=485
+   7: notify role done                            26.6     26.6   p90   35.2  n=485
+   8: end NVLink barrier exit                    109.0    109.7   p90  114.4  n=485
+   block-entry spread within a rank: median 0.0 us
+
+--- pr89tl_2N_12sm_128tok_tlch2_
+records: 2358 complete of 2880 raw (82%)
+
+== combine  (468 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          27.9     27.9   p90   34.0  n=468
+   2: scale-up (NVLink push) done                 92.1    114.0   p90  143.4  n=468
+   3: forward staging done                       128.1    143.3   p90  165.4  n=468
+   4: remote arrivals complete                   136.0    148.0   p90  167.6  n=468
+   5: proxy RDMA put (first..last)                86.8    107.6   p90  121.0  n=468
+   6: proxy done                                 144.2    144.2   p90  165.5  n=468
+   7: batch handed to proxy (first..last)         83.5     92.5   p90  106.0  n=468
+   block-entry spread within a rank: median 0.2 us
+
+== reduced combine  (466 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          12.7     12.7   p90   33.8  n=466
+   2: scale-up (NVLink push) done                113.7    135.7   p90  160.7  n=466
+   3: forward staging done                       158.5    172.4   p90  191.1  n=466
+   4: remote arrivals complete                   162.4    175.2   p90  192.7  n=466
+   5: proxy RDMA put (first..last)               104.0    122.8   p90  139.3  n=466
+   6: proxy done                                 173.4    173.4   p90  191.6  n=466
+   7: batch handed to proxy (first..last)        101.7    114.2   p90  134.5  n=466
+   block-entry spread within a rank: median 0.2 us
+
+== ('disp', 2)  (484 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          22.5     22.5   p90   30.1  n=484
+   2: scale-out RDMA put (first..last)            32.0     33.2   p90   43.1  n=484
+   3: scale-out role done                         48.2     52.4   p90   66.1  n=484
+   4: forward: source arrived (first..last)       52.7     79.6   p90   85.9  n=484
+   5: forward loop done                           77.4     85.9   p90   91.8  n=484
+   6: forward drain done                          78.5     86.9   p90   92.8  n=484
+   8: end NVLink barrier exit                     94.9     95.1   p90  102.2  n=484
+   block-entry spread within a rank: median 0.1 us
+
+== dispatch  (468 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          24.1     24.2   p90   29.9  n=468
+   2: scale-out RDMA put (first..last)            37.1     37.5   p90   45.1  n=468
+   3: scale-out role done                         51.9     55.4   p90   70.2  n=468
+   4: forward: source arrived (first..last)       54.8     83.3   p90   88.9  n=468
+   5: forward loop done                           82.6     90.0   p90   95.8  n=468
+   6: forward drain done                          83.7     91.0   p90   96.8  n=468
+   7: notify role done                            27.0     27.0   p90   37.9  n=468
+   8: end NVLink barrier exit                     99.1     99.3   p90  105.1  n=468
+   block-entry spread within a rank: median 0.1 us
+
+== expanded dispatch  (472 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          14.9     14.9   p90   28.8  n=472
+   2: scale-out RDMA put (first..last)            30.8     32.9   p90   43.1  n=472
+   3: scale-out role done                         51.0     53.8   p90   68.6  n=472
+   4: forward: source arrived (first..last)       53.6     82.0   p90   88.2  n=472
+   5: forward loop done                           81.1     88.9   p90   94.7  n=472
+   6: forward drain done                          82.3     89.9   p90   95.6  n=472
+   7: notify role done                            27.1     27.1   p90   32.7  n=472
+   8: end NVLink barrier exit                     98.8     98.8   p90  103.2  n=472
+   block-entry spread within a rank: median 0.0 us
+
+########## J. per-token scale-up cost (accumulators; DB = double buffering, RU = reduce unroll)
+--- pr89tl2_2N_8sm_128tok_tl2db0_
+== combine
+   tokens per block per call: median 97  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.35 us/token
+   10: load issue (direct) | register reduce      0.12 us/token
+   11: wait load + store issue                    0.93 us/token
+   sum: 1.40 us/token  x tokens/warp 19.4 = 27.2 us per warp
+== reduced combine
+   tokens per block per call: median 97  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.36 us/token
+   10: load issue (direct) | register reduce      1.32 us/token
+   11: wait load + store issue                    0.79 us/token
+   sum: 2.46 us/token  x tokens/warp 19.4 = 47.7 us per warp
+--- pr89tl2_2N_8sm_128tok_tl2db1_
+== combine
+   tokens per block per call: median 97  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.35 us/token
+   10: load issue (direct) | register reduce      0.13 us/token
+   11: wait load + store issue                    0.92 us/token
+   sum: 1.41 us/token  x tokens/warp 19.4 = 27.4 us per warp
+== reduced combine
+   tokens per block per call: median 98  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.36 us/token
+   10: load issue (direct) | register reduce      1.33 us/token
+   11: wait load + store issue                    0.79 us/token
+   sum: 2.48 us/token  x tokens/warp 19.6 = 48.7 us per warp
+--- unroll 4
+== combine
+   tokens per block per call: median 98  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.35 us/token
+   10: load issue (direct) | register reduce      0.12 us/token
+   11: wait load + store issue                    0.93 us/token
+   sum: 1.40 us/token  x tokens/warp 19.6 = 27.4 us per warp
+== reduced combine
+   tokens per block per call: median 98  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.36 us/token
+   10: load issue (direct) | register reduce      1.31 us/token
+   11: wait load + store issue                    0.79 us/token
+   sum: 2.45 us/token  x tokens/warp 19.6 = 48.0 us per warp
+--- unroll 7
+== combine
+   tokens per block per call: median 98  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.35 us/token
+   10: load issue (direct) | register reduce      0.12 us/token
+   11: wait load + store issue                    0.93 us/token
+   sum: 1.39 us/token  x tokens/warp 19.6 = 27.3 us per warp
+== reduced combine
+   tokens per block per call: median 97  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.37 us/token
+   10: load issue (direct) | register reduce      1.05 us/token
+   11: wait load + store issue                    0.80 us/token
+   sum: 2.21 us/token  x tokens/warp 19.4 = 42.9 us per warp
+--- unroll 14
+== combine
+   tokens per block per call: median 97  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.35 us/token
+   10: load issue (direct) | register reduce      0.12 us/token
+   11: wait load + store issue                    0.93 us/token
+   sum: 1.39 us/token  x tokens/warp 19.4 = 27.0 us per warp
+== reduced combine
+   tokens per block per call: median 98  (5 scale-up warps per block at 8 SM)
+   9: metadata / routing                         0.39 us/token
+   10: load issue (direct) | register reduce      0.85 us/token
+   11: wait load + store issue                    0.80 us/token
+   sum: 2.04 us/token  x tokens/warp 19.6 = 39.9 us per warp
+
+########## K. dispatch -> copy epilogue alignment (same GPU clock)
+--- 12 SM
+48 (rank, call) pairs; medians [p10, p90] in us
+  dispatch kernel (first entry -> last end)       120.7  [ 117.0,  125.4]
+  copy first block entry - dispatch end             7.1  [  -2.3,   14.1]
+  copy last block entry  - dispatch end             7.9  [   1.3,   14.6]
+  copy GridDepSync done  - dispatch end         10205.6  [   5.9, 10215.8]
+  copy work (sync done -> last block end)           3.5  [   2.5,    3.8]
+  copy kernel span (first entry -> last end)    10202.9  [   6.8, 10211.8]
+--- 4 SM
+45 (rank, call) pairs; medians [p10, p90] in us
+  dispatch kernel (first entry -> last end)       119.5  [ 112.0,  128.1]
+  copy first block entry - dispatch end             1.9  [  -1.7,   10.0]
+  copy last block entry  - dispatch end             2.4  [   1.3,   11.9]
+  copy GridDepSync done  - dispatch end         10184.1  [10179.3, 10191.9]
+  copy work (sync done -> last block end)           3.2  [   2.1,    3.6]
+  copy kernel span (first entry -> last end)    10183.6  [10180.0, 10190.0]
