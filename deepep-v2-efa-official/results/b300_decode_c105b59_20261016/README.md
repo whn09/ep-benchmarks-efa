@@ -56,3 +56,47 @@ Base: `amazon-contributing/DeepEP` main `c105b59`. Arms are merges of a PR head 
 Every JIT-visible knob goes through `csrc/jit/compiler.hpp` as a `-D` flag, so it is part
 of the JIT cache key. Direct mode (`--allow-hybrid-mode=0`) fails on this stack:
 `GIN: DevComm setup failed on all available backends`.
+
+## Removing the start rail barrier (sections L-O)
+
+The per-op cross-node barrier at the start of hybrid dispatch and combine costs 21-28 us
+each (I). Skipping it (L, `EP_SKIP_START_RAIL_BARRIER=1`) brings that phase down to about
+7 us (the NVLink half and grid syncs stay) and makes the layer **-10.3%** at 128 tok.
+Prefill is flat. But it is **not safe as-is**.
+
+**Back-to-back stress (N).** `stress/ep_determinism.py` runs dispatch → combine →
+cached dispatch → combine with no cross-rank sync inside a step, and compares bit for bit
+with iteration 0. With the barrier kept it is clean over 175k iterations. With the barrier
+skipped, rank 10's combine `out` is silently wrong 2 times in 180k iterations (no NaN).
+Two hazards, both closed by the barrier:
+
+1. **Shared GIN signals.** dispatch channel c and combine channel c use the same (QP,
+   signal id), because `channel_to_signal_id` is identical and decode has 1 part. SRD is
+   unordered, so a peer's early puts from the next op can satisfy a wait that belongs to
+   the current op. Fix: `EP_COMBINE_SIGNAL_OFFSET=N` moves combine to ids [N, 2N), and the
+   host plans dispatch within [0, N). On its own this was **not enough** (3 errors in 367k,
+   again rank 10).
+2. **Region overlap + #9's remote-first combine.** The dispatch scale-out recv region
+   (17.8-20.2 MB) lies inside combine's scale-up region (0-29.5 MB) (O). #9 issues
+   combine's remote puts BEFORE it finishes reading local-source tokens from the scale-up
+   region. So a peer can complete its combine, start the next dispatch, and overwrite
+   tokens this rank is still reading. Which rank breaks depends on where its local tokens
+   sit, hence always rank 10. Fix: `EP_DISPATCH_SCALEOUT_BASE` places dispatch's
+   send/recv after every combine region.
+
+**With both fixes: clean over 361k + 543k iterations on all 16 ranks (N).** At the
+unsafe rate about 10 errors were expected, so seeing none has a probability of roughly
+e^-10. **Timing (M): -10.6% (249.9 us), -12.7% (244.1 us) with reduce unroll 7.** The
+fixes cost nothing against the unsafe skip. Against main at 12 SM (315.2 us, A) that is
+**-22.6%**.
+
+Limits of this experiment:
+- BASE is a constant taken from the 128-tok layout. At 8192 tok the regions are about
+  64x larger and it overlaps dispatch's own scale-up region, causing
+  CUDA_ERROR_ILLEGAL_ADDRESS. A real patch must compute BASE on the host as
+  max(combine end, dispatch scale-up end) for the live shape, and check it against the
+  buffer size.
+- The signal split halves the dispatch signal budget. At decode that has no effect
+  (1 part), but it may reduce prefill parts.
+- Only 2 nodes and one shape were stressed. With more nodes a peer is still at most one
+  op ahead (each op needs every peer's data), but this was not tested.

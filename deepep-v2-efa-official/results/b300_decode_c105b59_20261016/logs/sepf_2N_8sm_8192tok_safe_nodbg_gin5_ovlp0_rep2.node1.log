@@ -1,0 +1,269 @@
+=== EP_NIC_NAME=rdmap101s0 (auto, 400 Gb/s) ===
+=== NCCL_IB_HCA=rdmap (auto: non-EFA ibverbs device ibp198s0f0 present) ===
+=== GIN: NCCL_GIN_TYPE=5 NCCL_SYM_GIN_KERNELS_ENABLE=0 ===
+=== PREFER_OVERLAP=0 (--prefer-overlap-with-compute) ===
+=== IMAGE=deepep-v2-efa-official:sm103-stackc105b59x3c737dc-sep  DeepEP=f66b7cb1b38a6faaf5c98a6e59226436cd9485ee ===
+=== DeepEP is a MERGE of: c105b599104e4229e5ad5f599653f3b5f8aa7f2b 3c737dcf0da5889ba7efd26e05b4808307cc38af
+chcap
+combine-batch
+scaleup-db
+reduce-unroll
+no-start-rail-barrier
+safe-signal-split
+dispatch-scaleout-base ===
++ docker run --rm --init --gpus all --privileged --network=host --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 --device=/dev/infiniband --device=/dev/gdrdrv -v /sys/class/infiniband:/sys/class/infiniband:ro -e MASTER_ADDR=172.31.14.167 -e MASTER_PORT=10010 -e WORLD_SIZE=2 -e RANK=0 -e NCCL_DEBUG=WARN -e EP_NIC_NAME=rdmap101s0 -e NCCL_IB_HCA=rdmap -e NCCL_GIN_TYPE=5 -e NCCL_SYM_GIN_KERNELS_ENABLE=0 -e EP_SKIP_START_RAIL_BARRIER=1 -e EP_COMBINE_SIGNAL_OFFSET=8 -e EP_DISPATCH_SCALEOUT_BASE=38707200 -e PYTHONUNBUFFERED=1 -e PYTHONFAULTHANDLER=1 deepep-v2-efa-official:sm103-stackc105b59x3c737dc-sep bash -lc 'timeout -s ABRT --kill-after=60 1800     python3 -u /opt/DeepEP/tests/elastic/test_ep.py     --num-processes=8 --num-tokens=8192     --hidden=7168 --num-topk=8 --num-experts=256     --num-sms=8 --allow-hybrid-mode=1     --prefer-overlap-with-compute=0 --test-first-only      '
+
+==========
+== CUDA ==
+==========
+
+CUDA Version 13.3.1
+
+Container image Copyright (c) 2016-2023, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+This container image and its contents are governed by the NVIDIA Deep Learning Container License.
+By pulling and using the container, you accept the terms and conditions of this license:
+https://developer.nvidia.com/ngc/nvidia-deep-learning-container-license
+
+A copy of this license is made available in this container at /NGC-DL-CONTAINER-LICENSE for your convenience.
+
+NCCL version 2.31.2+cuda13.3
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+DeepEP hybrid kernel selection: unordered
+Config:
+ > Ranks: 2 x 8
+ > Experts: 8/256
+ > Tokens: 8192 (max: 8192), hidden: 7168
+ > #SM: 8, #QPs: 13/13
+
+Running all test cases:
+ > Testing with do_handle_copy=1, expert_alignment=128, use_fp8_dispatch=1, num_bias=0, with_previous_event=0, async_with_compute_stream=0, allocate_on_comm_stream=0 ...
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:492:492 [1] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:492:492 [1] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x0000780737fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x0000780d22481300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:491:491 [0] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:491:491 [0] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x00007f07d3fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x00007f0dd4030300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:498:498 [7] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:498:498 [7] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x00007d5167fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x00007d57338e7300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:497:497 [6] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:497:497 [6] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x00007e055ffff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x00007e0b49665300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:496:496 [5] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:496:496 [5] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x00007b5557fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x00007b5b429f8300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:493:493 [2] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:493:493 [2] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x0000799a47fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x000079a010195300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:495:495 [4] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:495:495 [4] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x0000794c8bfff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x0000795254f77300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+`destroy()` is not called before DeepEP elastic buffer destruction, which can leak resources.
+
+[2026-10-17 03:39:26] ip-172-31-14-167:494:494 [3] include/alloc.h:370 (ncclCuMemFree) NCCL WARN Cuda failure 700 'an illegal memory access was encountered'
+
+[2026-10-17 03:39:26] ip-172-31-14-167:494:494 [3] include/alloc.h:384 (ncclCuMemFree) NCCL WARN Cuda failure 1 'invalid argument'
+terminate called after throwing an instance of 'EPException'
+  what():  NCCL exception (/opt/DeepEP/csrc/kernels/backend/symmetric.hpp:136): 1 (Cuda failure 1 'invalid argument')
+Fatal Python error: Aborted
+
+Thread 0x0000736417fff6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/dist-packages/torch/_inductor/compile_worker/timer.py", line 42 in check
+  File "/usr/lib/python3.12/threading.py", line 1010 in run
+  File "/usr/lib/python3.12/threading.py", line 1073 in _bootstrap_inner
+  File "/usr/lib/python3.12/threading.py", line 1030 in _bootstrap
+
+Current thread 0x00007369db8e1300 (most recent call first):
+  File "/usr/lib/python3.12/multiprocessing/process.py", line ??? in _bootstrap
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 135 in _main
+  File "/usr/lib/python3.12/multiprocessing/spawn.py", line 122 in spawn_main
+  File "<string>", line 1 in <module>
+
+Extension modules: numpy._core._multiarray_umath, numpy.linalg._umath_linalg, torch._C, torch._C._dynamo.autograd_compiler, torch._C._dynamo.eval_frame, torch._C._dynamo.guards, torch._C._dynamo.utils, torch._C._fft, torch._C._linalg, torch._C._nested, torch._C._nn, torch._C._sparse, torch._C._special, cuda.bindings._bindings.cydriver, cuda.bindings.cydriver, cuda.bindings.driver, cuda.bindings._bindings.cyruntime_ptds, cuda.bindings._bindings.cyruntime, cuda.bindings.cyruntime, cuda.bindings.runtime, numpy.random._common, numpy.random.bit_generator, numpy.random._bounded_integers, numpy.random._pcg64, numpy.random._generator, numpy.random._mt19937, numpy.random._philox, numpy.random._sfc64, numpy.random.mtrand, markupsafe._speedups, cuda_utils (total: 31)
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 491 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 493 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 494 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 495 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 496 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 497 via signal SIGTERM
+W1017 03:39:32.365000 424 torch/multiprocessing/spawn.py:165] Terminating process 498 via signal SIGTERM
+Traceback (most recent call last):
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 636, in <module>
+    torch.multiprocessing.spawn(test_loop, args=(num_processes, args), nprocs=num_processes)
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 340, in spawn
+    return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 296, in start_processes
+    while not context.join():
+              ^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 211, in join
+    raise ProcessRaisedException(msg, error_index, failed_process.pid)
+torch.multiprocessing.spawn.ProcessRaisedException: 
+
+-- Process 1 terminated with the following error:
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/torch/multiprocessing/spawn.py", line 87, in _wrap
+    fn(i, *args)
+  File "/usr/local/lib/python3.12/dist-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 556, in test_loop
+    test_dispatch_combine(buffer, args)
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 170, in test_dispatch_combine
+    launch(buffer, 'dispatch', with_previous_event, async_with_compute_stream, expanded_dispatch_args)
+  File "/opt/DeepEP/tests/elastic/test_ep.py", line 50, in launch
+    values = getattr(buffer, name)(**params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.12/dist-packages/deep_ep-2.1.0+local-py3.12-linux-x86_64.egg/deep_ep/buffers/elastic.py", line 1017, in dispatch
+    event) = self.runtime.dispatch(x, sf, topk_idx, topk_weights,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: CUDA driver exception (/opt/DeepEP/csrc/jit/handle.hpp:97): 700 (CUDA_ERROR_ILLEGAL_ADDRESS, an illegal memory access was encountered)
+

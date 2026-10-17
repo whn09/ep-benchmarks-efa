@@ -368,3 +368,121 @@ records: 2358 complete of 2880 raw (82%)
   copy GridDepSync done  - dispatch end         10184.1  [10179.3, 10191.9]
   copy work (sync done -> last block end)           3.2  [   2.1,    3.6]
   copy kernel span (first entry -> last end)    10183.6  [10180.0, 10190.0]
+
+########## L. start rail barrier skipped (UNSAFE experiment, EP_SKIP_START_RAIL_BARRIER, 3 reps)
+pr89nb 8 SM 128 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+nb0           115.2 [ 4.2]       108.7 [ 3.0]       151.5 [ 0.1]       165.3 [ 0.5]     280.5 ( +0.0%)  293.5  3
+nb1            96.0 [ 2.4]        91.3 [ 0.7]       137.5 [ 0.5]       155.5 [ 0.7]     251.6 (-10.3%)  263.6  3
+
+pr89nb 8 SM 8192 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+nb0          1298.7 [ 1.4]      1279.3 [ 1.4]      3798.2 [91.2]      4823.4 [35.8]    6122.1 ( +0.0%) 6347.8  3
+nb1          1283.9 [ 1.6]      1264.9 [ 2.1]      3760.8 [ 8.8]      4795.8 [17.2]    6079.6 ( -0.7%) 6304.7  3
+
+--- timeline tlnb0
+== reduced combine  (978 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          21.0     21.0   p90   27.1  n=978
+   2: scale-up (NVLink push) done                 79.0    110.6   p90  130.0  n=978
+   3: forward staging done                       115.4    140.3   p90  160.8  n=978
+   4: remote arrivals complete                   127.6    159.9   p90  171.2  n=978
+   5: proxy RDMA put (first..last)                80.9    128.4   p90  140.7  n=978
+   6: proxy done                                 144.6    144.6   p90  166.7  n=978
+   7: batch handed to proxy (first..last)         77.4     98.7   p90  113.6  n=978
+   block-entry spread within a rank: median 2006095.9 us
+
+== ('disp', 2)  (922 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          21.1     21.2   p90   33.6  n=922
+   2: scale-out RDMA put (first..last)            31.6     34.6   p90   47.2  n=922
+   3: scale-out role done                         47.3     57.0   p90   74.1  n=922
+   4: forward: source arrived (first..last)       50.5     83.5   p90   90.3  n=922
+   5: forward loop done                           72.9     88.2   p90   94.6  n=922
+   6: forward drain done                          74.1     89.5   p90   95.8  n=922
+   8: end NVLink barrier exit                     94.8     94.8   p90  111.4  n=922
+   block-entry spread within a rank: median 2042838.0 us
+
+== dispatch  (922 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                          22.0     22.0   p90   34.0  n=922
+   2: scale-out RDMA put (first..last)            32.4     35.1   p90   48.1  n=922
+   3: scale-out role done                         48.4     58.5   p90   75.2  n=922
+   4: forward: source arrived (first..last)       51.5     85.1   p90   92.8  n=922
+   5: forward loop done                           74.5     90.1   p90   97.3  n=922
+   6: forward drain done                          76.1     91.4   p90   98.7  n=922
+   7: notify role done                            27.8     27.8   p90   78.5  n=922
+   8: end NVLink barrier exit                     97.2     97.5   p90  112.5  n=922
+   block-entry spread within a rank: median 2102520.9 us
+
+--- timeline tlnb1
+== reduced combine  (877 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                           6.6      6.6   p90    8.5  n=877
+   2: scale-up (NVLink push) done                 64.3     95.7   p90  113.1  n=877
+   3: forward staging done                       100.3    124.3   p90  143.2  n=877
+   4: remote arrivals complete                   113.2    151.5   p90  163.0  n=877
+   5: proxy RDMA put (first..last)                65.4    113.0   p90  124.1  n=877
+   6: proxy done                                 128.4    128.4   p90  149.2  n=877
+   7: batch handed to proxy (first..last)         62.0     83.1   p90   95.7  n=877
+   block-entry spread within a rank: median 2585756.1 us
+
+== ('disp', 2)  (908 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                           7.0      7.1   p90    8.4  n=908
+   2: scale-out RDMA put (first..last)            15.4     17.9   p90   20.7  n=908
+   3: scale-out role done                         31.2     41.5   p90   47.3  n=908
+   4: forward: source arrived (first..last)       34.5     68.1   p90   81.8  n=908
+   5: forward loop done                           56.2     72.4   p90   86.2  n=908
+   6: forward drain done                          57.7     73.6   p90   87.4  n=908
+   8: end NVLink barrier exit                     81.5     83.7   p90   93.3  n=908
+   block-entry spread within a rank: median 2558479.4 us
+
+== dispatch  (930 block-records, 16 ranks)
+   event                                         first     last   (median us since block entry; p90 of last)
+   1: start barrier exit                           7.3      7.4   p90    9.0  n=930
+   2: scale-out RDMA put (first..last)            17.8     20.4   p90   22.3  n=930
+   3: scale-out role done                         34.5     44.8   p90   49.6  n=930
+   4: forward: source arrived (first..last)       37.9     72.4   p90   85.1  n=930
+   5: forward loop done                           60.0     77.3   p90   89.9  n=930
+   6: forward drain done                          61.6     78.6   p90   91.2  n=930
+   7: notify role done                            10.8     10.8   p90   56.1  n=930
+   8: end NVLink barrier exit                     85.5     85.7   p90   98.8  n=930
+   block-entry spread within a rank: median 2622869.5 us
+
+
+########## M. SAFE version: skip + EP_COMBINE_SIGNAL_OFFSET=8 + EP_DISPATCH_SCALEOUT_BASE=38707200 (3 reps)
+   (BASE is the 128-tok layout's combine end; at 8192 tok it overlaps -> illegal address, so no 8192 safe row)
+sepf 8 SM 128 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+base          114.5 [ 3.8]       110.4 [ 4.4]       151.5 [ 0.1]       165.2 [ 1.1]     279.6 ( +0.0%)  292.2  3
+safe           95.1 [ 0.5]        93.1 [ 7.8]       137.5 [ 0.1]       154.9 [ 0.9]     249.9 (-10.6%)  261.3  3
+saferu7        96.2 [ 3.6]        95.6 [ 8.7]       137.6 [ 0.3]       148.0 [ 0.8]     244.1 (-12.7%)  255.6  3
+
+sepf 8 SM 8192 tok, 2N/16 ranks, mean of reps; [rep range]
+knob               dispatch     cached dispatch             combine     reduced combine   disp+redC   +epi  n
+base         1299.4 [ 1.6]      1280.4 [ 0.6]      3750.2 [13.9]      4827.9 [ 9.9]    6127.3 ( +0.0%) 6353.3  3
+
+########## N. back-to-back stress (stress/ep_determinism.py, 128 tok, 8 SM, no barrier between the 4 ops of a step)
+   nb0 = barrier kept | nb1 = skipped | safe = skipped + signal split | sep, sep3 = skipped + signal split + region separation
+nb0    ranks=16 iters=[175233] CLEAN
+nb1    ranks=16 iters=[180284] out[r10:mis=2,nan=0]
+safe   ranks=16 iters=[366571] out[r10:mis=3,nan=0]
+sep    ranks=16 iters=[361570] CLEAN
+sep3   ranks=16 iters=[543141] CLEAN
+
+########## O. buffer layouts at 128 tok (rank 0; region ends in bytes from buffer start)
+--- safe (safe = default dispatch placement, sep = EP_DISPATCH_SCALEOUT_BASE)
+EPLAYOUT comb expanded=0 scaleup_end=29491200 recv_end=34099200 send_end=38707200
+EPLAYOUT comb expanded=1 scaleup_end=29491200 recv_end=34099200 send_end=38707200
+EPLAYOUT disp expand=0 cached=0 scaleup_end=15400960 send_end=17807360 recv_end=20213760
+EPLAYOUT disp expand=0 cached=1 scaleup_end=15400960 send_end=17807360 recv_end=20213760
+EPLAYOUT disp expand=1 cached=0 scaleup_end=15400960 send_end=17807360 recv_end=20213760
+EPLAYOUT disp expand=1 cached=1 scaleup_end=15400960 send_end=17807360 recv_end=20213760
+--- sep (safe = default dispatch placement, sep = EP_DISPATCH_SCALEOUT_BASE)
+EPLAYOUT comb expanded=0 scaleup_end=29491200 recv_end=34099200 send_end=38707200
+EPLAYOUT comb expanded=1 scaleup_end=29491200 recv_end=34099200 send_end=38707200
+EPLAYOUT disp expand=0 cached=0 scaleup_end=15400960 send_end=41113600 recv_end=43520000
+EPLAYOUT disp expand=0 cached=1 scaleup_end=15400960 send_end=41113600 recv_end=43520000
+EPLAYOUT disp expand=1 cached=0 scaleup_end=15400960 send_end=41113600 recv_end=43520000
+EPLAYOUT disp expand=1 cached=1 scaleup_end=15400960 send_end=41113600 recv_end=43520000

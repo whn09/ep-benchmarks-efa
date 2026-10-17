@@ -36,5 +36,21 @@ for u in 4 7 14; do echo "--- unroll $u"; python3 -I timeline/parse_acc.py 1.92 
 echo
 echo "########## K. dispatch -> copy epilogue alignment (same GPU clock)"
 for s in 12 4; do echo "--- $s SM"; python3 -I timeline/parse_copy.py $TL/pr89tl3_2N_${s}sm_128tok_tl3_*.log; done
+echo
+echo "########## L. start rail barrier skipped (UNSAFE experiment, EP_SKIP_START_RAIL_BARRIER, 3 reps)"
+python3 -I $T/gen.py $L pr89nb 8 128 nb0,nb1 3; echo
+python3 -I $T/gen.py $L pr89nb 8 8192 nb0,nb1 3; echo
+for k in tlnb0 tlnb1; do echo "--- timeline $k"; python3 -I timeline/parse_tl.py $L/pr89tlnb_2N_8sm_128tok_${k}_*.log | awk '/^== (dispatch|reduced combine) /{p=1} /^== (cached|expanded|combine) /{p=0} p'; done
+echo
+echo "########## M. SAFE version: skip + EP_COMBINE_SIGNAL_OFFSET=8 + EP_DISPATCH_SCALEOUT_BASE=38707200 (3 reps)"
+echo "   (BASE is the 128-tok layout's combine end; at 8192 tok it overlaps -> illegal address, so no 8192 safe row)"
+python3 -I $T/gen.py $L sepf 8 128 base,safe,saferu7 3; echo
+python3 -I $T/gen.py $L sepf 8 8192 base 3; echo
+echo "########## N. back-to-back stress (stress/ep_determinism.py, 128 tok, 8 SM, no barrier between the 4 ops of a step)"
+echo "   nb0 = barrier kept | nb1 = skipped | safe = skipped + signal split | sep, sep3 = skipped + signal split + region separation"
+python3 -I $T/stress_summary.py stress nb0 nb1 safe sep sep3
+echo
+echo "########## O. buffer layouts at 128 tok (rank 0; region ends in bytes from buffer start)"
+for f in layout/*.log; do echo "--- $(basename $f | cut -d_ -f1) (safe = default dispatch placement, sep = EP_DISPATCH_SCALEOUT_BASE)"; grep -ho 'EPLAYOUT [a-z][^E]*' $f | sed 's/ *$//' | sort -u; done
 } > tables.txt
 echo "wrote tables.txt ($(wc -l < tables.txt) lines)"
